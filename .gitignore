@@ -1,0 +1,19 @@
+.DS_Store
+.idea/
+.vscode/
+.opencode
+.mcplens/
+.scannerwork/
+.claude
+opencode.json
+
+# Terraform — redundante com terraform/.gitignore de propósito: o repositório é
+# público e o state contém DATABASE_URL, JWT_SECRET, PASSWORD_SALT e
+# WEBHOOK_SECRET em texto claro.
+*.tfstate
+*.tfstate.*
+*.tfvars
+!terraform/example.tfvars
+**/.terraform/
+tf*plan*
+tfdestroy*
