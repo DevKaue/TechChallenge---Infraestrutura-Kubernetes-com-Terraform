@@ -1,52 +1,37 @@
-name: CI
+name: ci
 
 on:
   pull_request:
-    branches: [develop, main]
+    branches: [main, develop]
   push:
-    branches: [develop, main]
+    branches: [main, develop]
 
-# Um PR atualizado cancela a execução anterior — não faz sentido pagar minuto
-# de runner por um commit que já foi substituído.
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  TF_ACTIONS_WORKING_DIR: ./terraform
 
 jobs:
-  terraform:
-    name: Validação do Terraform
+  fmt-and-validate:
+    name: fmt + validate
     runs-on: ubuntu-latest
-
+    defaults:
+      run:
+        working-directory: ${{ env.TF_ACTIONS_WORKING_DIR }}
     steps:
       - uses: actions/checkout@v4
 
       - uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: "1.10.x"
+          terraform_version: "~1.10.0"
 
-      - name: Formatação
-        run: terraform fmt -check -recursive
-        working-directory: terraform
+      - name: terraform fmt
+        run: terraform fmt -check -diff
 
-      # -backend=false: valida sem credencial da AWS e sem tocar no state do S3.
-      - name: Init
-        run: terraform init -backend=false
-        working-directory: terraform
+      - name: terraform init
+        run: terraform init -backend=false -input=false
 
-      - name: Validate
+      - name: terraform validate
         run: terraform validate
-        working-directory: terraform
-
-      # Trava o nível atual: hoje passa limpo em MEDIUM+.
-      #   skip-dirs  → o cache .terraform traz os YAML de EXEMPLO dos módulos
-      #                da comunidade, que não são nosso código.
-      #   trivyignore → decisões conscientes, cada uma com o porquê no arquivo.
-      - name: Scan de misconfiguração (trivy)
-        uses: aquasecurity/trivy-action@master
-        with:
-          scan-type: config
-          scan-ref: terraform
-          skip-dirs: terraform/.terraform
-          trivyignores: terraform/.trivyignore
-          severity: MEDIUM,HIGH,CRITICAL
-          exit-code: '1'

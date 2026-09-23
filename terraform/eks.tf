@@ -30,8 +30,7 @@ module "eks" {
       }
     },
     # Leitura para diagnóstico: SEM policy da AWS — a autorização vem do
-    # RoleBinding do namespace (manifesto do repositório da aplicação), que faz
-    # o bind neste grupo.
+    # RoleBinding do namespace (k8s/base/rbac.yaml), que faz o bind neste grupo.
     # É o IAM autenticando e o RBAC autorizando, cada um no seu papel.
     {
       for arn in var.cluster_readonly_arns : "readonly-${basename(arn)}" => {

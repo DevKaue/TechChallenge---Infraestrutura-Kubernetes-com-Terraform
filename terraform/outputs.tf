@@ -9,7 +9,7 @@ output "region" {
 }
 
 output "ecr_url" {
-  description = "URL do repositório ECR. Destino do docker push do repositório da aplicação."
+  description = "URL do repositório ECR. Destino do docker push e do kustomize edit set image."
   value       = aws_ecr_repository.api.repository_url
 }
 
@@ -19,28 +19,38 @@ output "ecr_repository_name" {
 }
 
 output "vpc_cidr" {
-  description = "CIDR da VPC. Substitui o placeholder 10.0.0.0/16 nas NetworkPolicies do overlay aws do repositório da aplicação."
+  description = "CIDR da VPC. Substitui o placeholder 10.0.0.0/16 nas NetworkPolicies do overlay aws."
   value       = module.vpc.vpc_cidr_block
 }
 
 output "vpc_id" {
-  description = "ID da VPC. Consumido pelos repositórios de banco e da aplicação."
+  description = "ID da VPC. Consumido pelo terraform_remote_state do repositório techchallenge-infra-db."
   value       = module.vpc.vpc_id
 }
 
 output "private_subnet_ids" {
-  description = "Subnets privadas. O RDS do repositório de banco usa para o subnet group."
+  description = "IDs das subnets privadas. Consumido pelo terraform_remote_state do repositório techchallenge-infra-db."
   value       = module.vpc.private_subnets
 }
 
 output "node_security_group_id" {
-  description = "Security group dos nós do EKS. O RDS do repositório de banco libera o ingress 5432 a partir dele."
+  description = "ID do security group dos nós EKS. Autoriza (na ponta do RDS) a porta 5432 vinda dos nós. Consumido pelo repositório techchallenge-infra-db."
   value       = module.eks.node_security_group_id
 }
 
-output "github_deploy_role_arn" {
-  description = "ARN a configurar como AWS_DEPLOY_ROLE nos secrets do repositório GitHub."
-  value       = local.github_enabled ? aws_iam_role.github_deploy[0].arn : null
+output "github_app_deploy_role_arn" {
+  description = "ARN a configurar como AWS_DEPLOY_ROLE nos secrets do repositório techchallenge-app."
+  value       = var.github_app_repository != "" ? aws_iam_role.github_app_deploy[0].arn : null
+}
+
+output "github_terraform_k8s_role_arn" {
+  description = "ARN a configurar como AWS_DEPLOY_ROLE nos secrets deste repositório (techchallenge-infra-k8s)."
+  value       = var.github_repository != "" ? aws_iam_role.github_terraform_k8s[0].arn : null
+}
+
+output "github_lambda_deploy_role_arn" {
+  description = "ARN a configurar como AWS_DEPLOY_ROLE nos secrets do repositório techchallenge-lambda."
+  value       = var.github_lambda_repository != "" ? aws_iam_role.github_lambda_deploy[0].arn : null
 }
 
 output "kubeconfig_command" {
