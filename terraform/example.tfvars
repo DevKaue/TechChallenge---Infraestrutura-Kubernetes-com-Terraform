@@ -24,6 +24,11 @@ github_repository        = "Jean-Carlo-Torres/techchallenge-infra-k8s"
 github_app_repository    = "Jean-Carlo-Torres/techchallenge-app"
 github_lambda_repository = "Jean-Carlo-Torres/techchallenge-lambda"
 
+# AWS Academy (Learner Lab): a conta não permite criar roles de IAM. Preencha
+# com a LabRole para cluster, nós e controllers usarem-na (sem IRSA e sem as
+# roles OIDC acima). Use também node_instance_types = ["t3.medium"] ou t3.large.
+# lab_role_arn = "arn:aws:iam::<conta>:role/LabRole"
+
 # ARNs de IAM que também devem ser admin do cluster (além de quem roda o apply).
 cluster_admin_arns = []
 

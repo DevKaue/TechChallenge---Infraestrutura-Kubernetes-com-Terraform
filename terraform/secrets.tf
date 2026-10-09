@@ -16,6 +16,18 @@ resource "random_password" "jwt_secret" {
   special = false
 }
 
+# Fonte única do segredo HS256 dos tokens: a Lambda de CPF (que emite token de
+# cliente) lê daqui em runtime, e o deploy da aplicação lê daqui para montar o
+# Secret do app e as credenciais jwt dos KongConsumers. Se cada um tivesse o
+# seu, o Kong recusaria os tokens de quem estivesse divergente.
+resource "aws_ssm_parameter" "jwt_secret" {
+  name        = "/${var.project}/${var.environment}/auth/jwt-secret"
+  description = "Segredo HS256 compartilhado entre Lambda de autenticação, aplicação e Kong."
+  type        = "SecureString"
+  value       = random_password.jwt_secret.result
+  tags        = local.tags
+}
+
 # ATENÇÃO: salt fixo e global do scrypt. Trocar este valor invalida TODAS as
 # senhas já gravadas no banco. `random_password` é estável no state, mas um
 # ciclo destroy/apply gera outro — ver a seção de dívidas no README.

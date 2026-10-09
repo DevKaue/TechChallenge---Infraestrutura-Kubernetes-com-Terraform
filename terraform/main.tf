@@ -14,4 +14,9 @@ locals {
     Environment = var.environment
     ManagedBy   = "terraform"
   }
+
+  # AWS Academy (Learner Lab): sem iam:CreateRole, iam:CreatePolicy nem provider
+  # OIDC. Com lab_role_arn preenchido, cluster, nós e controllers usam a LabRole,
+  # e nenhum recurso de IAM é criado.
+  lab_mode = var.lab_role_arn != ""
 }

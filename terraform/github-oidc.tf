@@ -9,14 +9,16 @@
 # primeiro da ordem de criação) que guarda o thumbprint. O infra-db NÃO recria o
 # provider: usa `data "aws_iam_openid_connect_provider"` deste mesmo provider.
 
+# AWS Academy (local.lab_mode): nada deste arquivo é criado — a conta não
+# permite provider OIDC nem roles. Os pipelines usam as credenciais temporárias
+# do lab (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY e AWS_SESSION_TOKEN): no
+# workspace do Terraform Cloud e nos secrets do GitHub do repositório do app.
 locals {
-  oidc_repos = compact([
-    var.github_repository,
-    var.github_app_repository,
-    var.github_lambda_repository,
-  ])
+  github_k8s_role_enabled    = !local.lab_mode && var.github_repository != ""
+  github_app_role_enabled    = !local.lab_mode && var.github_app_repository != ""
+  github_lambda_role_enabled = !local.lab_mode && var.github_lambda_repository != ""
 
-  oidc_enabled = length(local.oidc_repos) > 0
+  oidc_enabled = local.github_k8s_role_enabled || local.github_app_role_enabled || local.github_lambda_role_enabled
 }
 
 data "tls_certificate" "github" {
@@ -40,7 +42,7 @@ resource "aws_iam_openid_connect_provider" "github" {
 #    addons). Precisa de permissão ampla de rede/compute/IAM.
 # ─────────────────────────────────────────────────────────────────────────────
 data "aws_iam_policy_document" "assume_k8s" {
-  count = var.github_repository != "" ? 1 : 0
+  count = local.github_k8s_role_enabled ? 1 : 0
 
   statement {
     effect  = "Allow"
@@ -66,7 +68,7 @@ data "aws_iam_policy_document" "assume_k8s" {
 }
 
 resource "aws_iam_role" "github_terraform_k8s" {
-  count = var.github_repository != "" ? 1 : 0
+  count = local.github_k8s_role_enabled ? 1 : 0
 
   name               = "${local.name}-github-terraform-k8s"
   assume_role_policy = data.aws_iam_policy_document.assume_k8s[0].json
@@ -78,7 +80,7 @@ resource "aws_iam_role" "github_terraform_k8s" {
 # real, restringe por recurso — aqui a prioridade é o fluxo funcionar e o
 # princípio "só este repo assume" estar garantido pelo OIDC.
 data "aws_iam_policy_document" "github_terraform_k8s" {
-  count = var.github_repository != "" ? 1 : 0
+  count = local.github_k8s_role_enabled ? 1 : 0
 
   statement {
     effect = "Allow"
@@ -111,10 +113,32 @@ data "aws_iam_policy_document" "github_terraform_k8s" {
     ]
     resources = ["*"]
   }
+
+  # Parâmetros SSM só sob o prefixo do projeto (secrets.tf). DescribeParameters
+  # não aceita restrição por recurso, por isso fica num statement à parte.
+  statement {
+    effect = "Allow"
+    actions = [
+      "ssm:PutParameter",
+      "ssm:GetParameter",
+      "ssm:GetParameters",
+      "ssm:DeleteParameter",
+      "ssm:AddTagsToResource",
+      "ssm:RemoveTagsFromResource",
+      "ssm:ListTagsForResource",
+    ]
+    resources = ["arn:aws:ssm:${var.region}:${data.aws_caller_identity.current.account_id}:parameter/${var.project}/*"]
+  }
+
+  statement {
+    effect    = "Allow"
+    actions   = ["ssm:DescribeParameters"]
+    resources = ["*"]
+  }
 }
 
 resource "aws_iam_role_policy" "github_terraform_k8s" {
-  count = var.github_repository != "" ? 1 : 0
+  count = local.github_k8s_role_enabled ? 1 : 0
 
   name   = "deploy"
   role   = aws_iam_role.github_terraform_k8s[0].id
@@ -128,7 +152,7 @@ resource "aws_iam_role_policy" "github_terraform_k8s" {
 #    autoriza). É a role que o app repo configura como AWS_DEPLOY_ROLE.
 # ─────────────────────────────────────────────────────────────────────────────
 data "aws_iam_policy_document" "assume_app" {
-  count = var.github_app_repository != "" ? 1 : 0
+  count = local.github_app_role_enabled ? 1 : 0
 
   statement {
     effect  = "Allow"
@@ -154,7 +178,7 @@ data "aws_iam_policy_document" "assume_app" {
 }
 
 resource "aws_iam_role" "github_app_deploy" {
-  count = var.github_app_repository != "" ? 1 : 0
+  count = local.github_app_role_enabled ? 1 : 0
 
   name               = "${local.name}-github-app-deploy"
   assume_role_policy = data.aws_iam_policy_document.assume_app[0].json
@@ -163,7 +187,7 @@ resource "aws_iam_role" "github_app_deploy" {
 }
 
 data "aws_iam_policy_document" "github_app_deploy" {
-  count = var.github_app_repository != "" ? 1 : 0
+  count = local.github_app_role_enabled ? 1 : 0
 
   statement {
     effect    = "Allow"
@@ -198,10 +222,18 @@ data "aws_iam_policy_document" "github_app_deploy" {
     actions   = ["secretsmanager:GetSecretValue"]
     resources = ["arn:aws:secretsmanager:${var.region}:*:secret:${local.name}/rds*"]
   }
+
+  # Lê o segredo JWT compartilhado (secrets.tf) para montar o Secret do app e as
+  # credenciais jwt dos KongConsumers.
+  statement {
+    effect    = "Allow"
+    actions   = ["ssm:GetParameter"]
+    resources = [aws_ssm_parameter.jwt_secret.arn]
+  }
 }
 
 resource "aws_iam_role_policy" "github_app_deploy" {
-  count = var.github_app_repository != "" ? 1 : 0
+  count = local.github_app_role_enabled ? 1 : 0
 
   name   = "deploy"
   role   = aws_iam_role.github_app_deploy[0].id
@@ -209,7 +241,7 @@ resource "aws_iam_role_policy" "github_app_deploy" {
 }
 
 resource "aws_eks_access_entry" "github_app_deploy" {
-  count = var.github_app_repository != "" ? 1 : 0
+  count = local.github_app_role_enabled ? 1 : 0
 
   cluster_name  = module.eks.cluster_name
   principal_arn = aws_iam_role.github_app_deploy[0].arn
@@ -217,7 +249,7 @@ resource "aws_eks_access_entry" "github_app_deploy" {
 }
 
 resource "aws_eks_access_policy_association" "github_app_deploy" {
-  count = var.github_app_repository != "" ? 1 : 0
+  count = local.github_app_role_enabled ? 1 : 0
 
   cluster_name  = module.eks.cluster_name
   principal_arn = aws_iam_role.github_app_deploy[0].arn
@@ -230,11 +262,12 @@ resource "aws_eks_access_policy_association" "github_app_deploy" {
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 3. Deploy da LAMBDA (repo techchallenge-lambda)
-#    `sam deploy` = CloudFormation que cria API Gateway, função, role e VPC
-#    config. A role é assumida pelo repo DONO da lambda.
+#    `sam deploy` = CloudFormation que cria função, role e VPC config. Sem API
+#    Gateway da AWS: quem expõe a Lambda é o Kong (kong.tf), via plugin
+#    aws-lambda. A role é assumida pelo repo DONO da lambda.
 # ─────────────────────────────────────────────────────────────────────────────
 data "aws_iam_policy_document" "assume_lambda" {
-  count = var.github_lambda_repository != "" ? 1 : 0
+  count = local.github_lambda_role_enabled ? 1 : 0
 
   statement {
     effect  = "Allow"
@@ -260,7 +293,7 @@ data "aws_iam_policy_document" "assume_lambda" {
 }
 
 resource "aws_iam_role" "github_lambda_deploy" {
-  count = var.github_lambda_repository != "" ? 1 : 0
+  count = local.github_lambda_role_enabled ? 1 : 0
 
   name               = "${local.name}-github-lambda-deploy"
   assume_role_policy = data.aws_iam_policy_document.assume_lambda[0].json
@@ -269,7 +302,7 @@ resource "aws_iam_role" "github_lambda_deploy" {
 }
 
 data "aws_iam_policy_document" "github_lambda_deploy" {
-  count = var.github_lambda_repository != "" ? 1 : 0
+  count = local.github_lambda_role_enabled ? 1 : 0
 
   statement {
     effect = "Allow"
@@ -284,7 +317,6 @@ data "aws_iam_policy_document" "github_lambda_deploy" {
       "cloudformation:UpdateStack",
       "cloudformation:DeleteStack",
       "lambda:*",
-      "apigateway:*",
       "logs:CreateLogGroup",
       "logs:CreateLogStream",
       "logs:PutLogEvents",
@@ -320,7 +352,7 @@ data "aws_iam_policy_document" "github_lambda_deploy" {
 }
 
 resource "aws_iam_role_policy" "github_lambda_deploy" {
-  count = var.github_lambda_repository != "" ? 1 : 0
+  count = local.github_lambda_role_enabled ? 1 : 0
 
   name   = "deploy"
   role   = aws_iam_role.github_lambda_deploy[0].id
