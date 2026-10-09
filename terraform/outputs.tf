@@ -40,17 +40,37 @@ output "node_security_group_id" {
 
 output "github_app_deploy_role_arn" {
   description = "ARN a configurar como AWS_DEPLOY_ROLE nos secrets do repositório techchallenge-app."
-  value       = var.github_app_repository != "" ? aws_iam_role.github_app_deploy[0].arn : null
+  value       = local.github_app_role_enabled ? aws_iam_role.github_app_deploy[0].arn : null
 }
 
 output "github_terraform_k8s_role_arn" {
   description = "ARN a configurar como AWS_DEPLOY_ROLE nos secrets deste repositório (techchallenge-infra-k8s)."
-  value       = var.github_repository != "" ? aws_iam_role.github_terraform_k8s[0].arn : null
+  value       = local.github_k8s_role_enabled ? aws_iam_role.github_terraform_k8s[0].arn : null
 }
 
 output "github_lambda_deploy_role_arn" {
   description = "ARN a configurar como AWS_DEPLOY_ROLE nos secrets do repositório techchallenge-lambda."
-  value       = var.github_lambda_repository != "" ? aws_iam_role.github_lambda_deploy[0].arn : null
+  value       = local.github_lambda_role_enabled ? aws_iam_role.github_lambda_deploy[0].arn : null
+}
+
+output "auth_lambda_name" {
+  description = "Nome que a Lambda de autenticação precisa ter. O Kong só tem permissão para invocar esta função."
+  value       = local.auth_lambda_name
+}
+
+output "jwt_secret_ssm_path" {
+  description = "Parâmetro SSM do segredo JWT. Vira JWT_SECRET_SSM_PATH na Lambda e é lido pelo deploy da aplicação."
+  value       = aws_ssm_parameter.jwt_secret.name
+}
+
+output "kong_proxy_hostname_command" {
+  description = "Comando para obter o DNS do NLB do Kong (endereço público da API)."
+  value       = "kubectl -n ${local.kong_namespace} get svc kong-gateway-proxy -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'"
+}
+
+output "kong_manager_command" {
+  description = "Port-forward do Kong Manager (só leitura em DB-less) e da Admin API que ele consome."
+  value       = "kubectl -n ${local.kong_namespace} port-forward deploy/kong-gateway 8002:8002 8001:8001"
 }
 
 output "kubeconfig_command" {

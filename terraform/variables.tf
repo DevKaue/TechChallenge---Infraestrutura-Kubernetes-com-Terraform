@@ -100,10 +100,33 @@ variable "github_repository" {
   default     = "DevKaue/TechChallenge---Infraestrutura-Kubernetes-com-Terraform"
 }
 
+variable "github_app_repository" {
+  description = "owner/repo da aplicação autorizado a assumir a role de deploy via OIDC. Vazio desliga o recurso."
+  type        = string
+  default     = "DevKaue/tech-challenge-app-"
+}
+
+variable "github_lambda_repository" {
+  description = "owner/repo da Lambda de autenticação autorizado a assumir a role de deploy via OIDC. Vazio desliga o recurso."
+  type        = string
+  default     = "DevKaue/TechChallange---Function-Serverless"
+}
+
 variable "github_deploy_policy_arns" {
   description = "Policies anexadas à role de deploy do CI. O apply do Terraform cria VPC, IAM, EKS e escreve no state S3, o que exige permissão ampla. Restrinja numa conta real."
   type        = list(string)
   default     = ["arn:aws:iam::aws:policy/AdministratorAccess"]
+}
+
+variable "lab_role_arn" {
+  description = "ARN da LabRole do AWS Academy (ex.: arn:aws:iam::<conta>:role/LabRole). Preenchido, nenhum recurso de IAM é criado: cluster e nós usam a LabRole, sem IRSA nem roles OIDC do GitHub, e ALB Controller e Kong usam a credencial do nó. Vazio = IRSA."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.lab_role_arn == "" || can(regex("^arn:aws:iam::[0-9]{12}:role/", var.lab_role_arn))
+    error_message = "lab_role_arn precisa ser vazio ou um ARN de role IAM (arn:aws:iam::<conta>:role/<nome>)."
+  }
 }
 
 variable "cluster_admin_arns" {

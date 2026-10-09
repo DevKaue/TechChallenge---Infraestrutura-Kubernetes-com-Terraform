@@ -12,6 +12,12 @@ module "eks" {
   # O acesso continua autenticado por IAM + autorizado por RBAC.
   cluster_endpoint_public_access = true
 
+  # AWS Academy: role do cluster = LabRole, e sem provider OIDC (o IRSA fica
+  # desligado; os controllers usam a credencial do nó).
+  create_iam_role = !local.lab_mode
+  iam_role_arn    = local.lab_mode ? var.lab_role_arn : null
+  enable_irsa     = !local.lab_mode
+
   # Access entries (API), não o ConfigMap aws-auth — que está em depreciação.
   # Quem roda o apply vira admin do cluster automaticamente.
   enable_cluster_creator_admin_permissions = true
@@ -50,6 +56,11 @@ module "eks" {
 
       # Nós em subnet privada, saindo pelo NAT. O ALB fica nas públicas.
       subnet_ids = module.vpc.private_subnets
+
+      # AWS Academy: role dos nós = LabRole. Nesse modo o anexo de policy abaixo
+      # é ignorado pelo módulo, e as permissões do CloudWatch são as da LabRole.
+      create_iam_role = !local.lab_mode
+      iam_role_arn    = local.lab_mode ? var.lab_role_arn : null
 
       iam_role_additional_policies = {
         # O agente do Container Insights publica métricas e logs com a role do

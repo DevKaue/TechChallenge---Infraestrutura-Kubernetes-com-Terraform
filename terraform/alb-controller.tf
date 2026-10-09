@@ -2,6 +2,9 @@
 # Sem ele o Ingress fica sem ADDRESS e nada no cluster indica o motivo.
 
 module "alb_controller_irsa" {
+  # AWS Academy: sem IRSA; o controller usa a credencial do nó (LabRole) via IMDS.
+  count = local.lab_mode ? 0 : 1
+
   source  = "terraform-aws-modules/iam/aws//modules/iam-role-for-service-accounts-eks"
   version = "5.60.0"
 
@@ -16,6 +19,13 @@ module "alb_controller_irsa" {
   }
 
   tags = local.tags
+}
+
+# O módulo ganhou count: sem isto, um state já aplicado destruiria e recriaria a
+# role do controller.
+moved {
+  from = module.alb_controller_irsa
+  to   = module.alb_controller_irsa[0]
 }
 
 resource "helm_release" "alb_controller" {
@@ -37,9 +47,12 @@ resource "helm_release" "alb_controller" {
     name  = "serviceAccount.name"
     value = "aws-load-balancer-controller"
   }
-  set {
-    name  = "serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn"
-    value = module.alb_controller_irsa.iam_role_arn
+  dynamic "set" {
+    for_each = module.alb_controller_irsa[*].iam_role_arn
+    content {
+      name  = "serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn"
+      value = set.value
+    }
   }
   set {
     name  = "vpcId"
