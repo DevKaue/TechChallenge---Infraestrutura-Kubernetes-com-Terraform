@@ -37,6 +37,9 @@ contém o código da aplicação, os manifestos Kustomize, nem o banco de dados:
 terraform/            toda a infraestrutura como código
 ├── versions.tf       required_version, providers e bloco cloud (HCP Terraform)
 ├── providers.tf      aws / helm
+├── modules/eks/      terraform-aws-modules/eks v20.37.2 vendored
+│                     (fork local: input `cluster_creator_arn` no lugar
+│                     do `aws_iam_session_context`, que exige iam:GetRole)
 ├── vpc.tf            VPC 3 AZ, NAT único, tags de subnet para o ALB
 ├── ecr.tf            repositório com tag imutável e lifecycle
 ├── eks.tf            cluster 1.32, managed node group, access entries
@@ -72,13 +75,24 @@ Passos:
      `AWS_SESSION_TOKEN` — credenciais temporárias do Academy, renovadas a cada
      sessão (~4h).
    - **Terraform**: `environment` (`prod`/`staging`),
-     `lab_role_arn = arn:aws:iam::<conta>:role/LabRole` e
+     `lab_role_arn = arn:aws:iam::<conta>:role/LabRole`,
+     `cluster_creator_arn = arn:aws:iam::<conta>:role/voclabs` e
      `node_instance_types = ["t3.medium"]`.
 4. Conecte o VCS (GitHub) do workspace para plan/apply automáticos, ou rode pelo
    CLI definindo `TF_WORKSPACE`.
 
 > O campo `organization` do bloco `cloud` está como `REPLACE_ORG`: troque pelo
 > slug da sua organização no `app.terraform.io`.
+
+> **Módulo EKS vendored** (`terraform/modules/eks`): cópia local do
+> `terraform-aws-modules/eks/aws` v20.37.2 com um input a mais,
+> `cluster_creator_arn`. O módulo original resolve o criador do cluster
+> com o data source `aws_iam_session_context`, que chama `iam:GetRole` —
+> negado explicitamente pela política da conta do AWS Academy (`Pvoclabs`).
+> Com o ARN da role `voclabs` passado por variável, o access entry de
+> admin do criador fica explícito, igual ao padrão da aula, sem a
+> chamada IAM. Os pontos alterados no módulo estão marcados com
+> `[PATCH FIAP lab]` e o código original preservado em comentários.
 
 ## Migração do state S3 existente
 

@@ -88,7 +88,7 @@ variable "github_lambda_repository" {
 variable "lab_role_arn" {
   description = "ARN da LabRole do AWS Academy (ex.: arn:aws:iam::<conta>:role/LabRole). Preenchido, nenhum recurso de IAM é criado: cluster e nós usam a LabRole, sem IRSA nem roles OIDC do GitHub, e ALB Controller e Kong usam a credencial do nó. Vazio = IRSA."
   type        = string
-  default     = ""
+  default = "arn:aws:iam::997726080598:role/LabRole"
 
   validation {
     condition     = var.lab_role_arn == "" || can(regex("^arn:aws:iam::[0-9]{12}:role/", var.lab_role_arn))
@@ -106,4 +106,15 @@ variable "cluster_readonly_arns" {
   description = "ARNs de IAM que recebem acesso somente-leitura ao namespace techchallenge (via grupo RBAC techchallenge:readonly)."
   type        = list(string)
   default     = []
+}
+
+variable "cluster_creator_arn" {
+  description = "ARN da role que criou/cria o cluster EKS (ex.: arn:aws:iam::<conta>:role/voclabs). Nulo mantém o comportamento original do módulo (resolução via aws_iam_session_context)."
+  type        = string
+  default = "arn:aws:iam::997726080598:role/voclabs"
+
+  validation {
+    condition     = var.cluster_creator_arn == null || can(regex("^arn:aws:iam::[0-9]{12}:role/.+$", var.cluster_creator_arn))
+    error_message = "cluster_creator_arn precisa ser nulo ou um ARN de role IAM (arn:aws:iam::<conta>:role/<nome>)."
+  }
 }

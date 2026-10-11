@@ -1,9 +1,23 @@
 module "eks" {
-  source  = "terraform-aws-modules/eks/aws"
-  version = "20.37.2"
+  # [PATCH FIAP lab] Módulo vendored: cópia local do registry module
+  # terraform-aws-modules/eks/aws v20.37.2 com o input cluster_creator_arn.
+  # O módulo do registry não tem como informar o ARN do criador do cluster —
+  # ele resolve automaticamente via data aws_iam_session_context, que chama
+  # iam:GetRole, negado explicitamente pela política da conta do AWS Academy
+  # (Pvoclabs). No vendoring, o data source só é lido quando
+  # cluster_creator_arn é nulo.
+  # Histórico (antes do vendoring):
+  #   source  = "terraform-aws-modules/eks/aws"
+  #   version = "20.37.2"
+  source = "./modules/eks"
 
   cluster_name    = local.name
   cluster_version = var.kubernetes_version
+
+  # [PATCH FIAP lab] ARN do criador do cluster. No lab é a role voclabs
+  # (arn:aws:iam::<conta>:role/voclabs), que passa a admin do cluster via
+  # access entry — mesmo padrão do exemplo da aula (access-entry.tf).
+  cluster_creator_arn = var.cluster_creator_arn
 
   vpc_id     = module.vpc.vpc_id
   subnet_ids = module.vpc.private_subnets
