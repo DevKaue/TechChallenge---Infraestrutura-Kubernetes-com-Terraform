@@ -1,17 +1,20 @@
+# Variáveis do root module. No HCP Terraform a MAIORIA disto vive como variável
+# do workspace (ver README); este arquivo serve para runs locais:
+#   terraform plan -var-file=terraform.tfvars
 # Copie para terraform.tfvars (gitignored) e ajuste.
-# Nenhuma senha aqui: para o RDS, elas são geradas e vão para o Secrets Manager
-# no repositório techchallenge-infra-db.
 
 region      = "us-east-1"
 project     = "techchallenge"
-environment = "prod"
+environment = "prod" # no TFC: prod no workspace de produção, staging no de homologação
 
 # Precisa não colidir com a rede de casa/escritório se um dia houver VPN.
 vpc_cidr = "10.0.0.0/16"
 
 kubernetes_version = "1.32"
 
-# t3.medium x2 comporta a API (3 réplicas), o ALB controller e o ESO.
+# AWS Academy: t3.medium é a escolha do lab. Numa conta paga, o default
+# c7i-flex.large também serve (2 vCPU / 4 GiB, free-tier-eligible). Evite os
+# t4g.*: são ARM (Graviton) e a imagem é buildada para amd64.
 node_instance_types = ["t3.medium"]
 node_group_size = {
   min     = 2
@@ -19,15 +22,16 @@ node_group_size = {
   desired = 2
 }
 
-# Vazio desliga cada role de deploy por OIDC. Cada repo assume só a sua.
-github_repository        = "Jean-Carlo-Torres/techchallenge-infra-k8s"
-github_app_repository    = "Jean-Carlo-Torres/techchallenge-app"
-github_lambda_repository = "Jean-Carlo-Torres/techchallenge-lambda"
-
 # AWS Academy (Learner Lab): a conta não permite criar roles de IAM. Preencha
 # com a LabRole para cluster, nós e controllers usarem-na (sem IRSA e sem as
-# roles OIDC acima). Use também node_instance_types = ["t3.medium"] ou t3.large.
-# lab_role_arn = "arn:aws:iam::<conta>:role/LabRole"
+# roles OIDC do GitHub). No TFC, defina esta variável no workspace.
+lab_role_arn = "arn:aws:iam::<conta>:role/LabRole"
+
+# Fora do Academy (conta paga), descomente e preencha para habilitar as roles de
+# deploy por OIDC da aplicação e da Lambda. Ignoradas quando lab_role_arn está
+# preenchido (local.lab_mode).
+# github_app_repository    = "owner/techchallenge-app"
+# github_lambda_repository = "owner/techchallenge-lambda"
 
 # ARNs de IAM que também devem ser admin do cluster (além de quem roda o apply).
 cluster_admin_arns = []

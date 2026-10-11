@@ -43,11 +43,6 @@ output "github_app_deploy_role_arn" {
   value       = local.github_app_role_enabled ? aws_iam_role.github_app_deploy[0].arn : null
 }
 
-output "github_terraform_k8s_role_arn" {
-  description = "ARN a configurar como AWS_DEPLOY_ROLE nos secrets deste repositório (techchallenge-infra-k8s)."
-  value       = local.github_k8s_role_enabled ? aws_iam_role.github_terraform_k8s[0].arn : null
-}
-
 output "github_lambda_deploy_role_arn" {
   description = "ARN a configurar como AWS_DEPLOY_ROLE nos secrets do repositório techchallenge-lambda."
   value       = local.github_lambda_role_enabled ? aws_iam_role.github_lambda_deploy[0].arn : null

@@ -1,8 +1,5 @@
 variable "region" {
-  # ATENÇÃO: o backend S3 (versions.tf) tem a região como literal, porque bloco
-  # `backend` não aceita variável. Trocar aqui NÃO troca a do backend — os dois
-  # precisam mudar juntos, senão o state fica numa região e a infra em outra.
-  description = "Região da AWS. Precisa bater com a região do backend em versions.tf."
+  description = "Região da AWS. Usada pelo provider aws e pelos módulos (VPC, EKS, ECR, SSM)."
   type        = string
   default     = "us-east-1"
 }
@@ -76,30 +73,6 @@ variable "node_group_size" {
   }
 }
 
-variable "db_state_bucket" {
-  description = "Bucket S3 que guarda o state do repositório de banco de dados gerenciado."
-  type        = string
-  default     = "techchallenge-fiap-v1"
-}
-
-variable "db_state_key" {
-  description = "Key do state do repositório de banco de dados. Um key por ambiente."
-  type        = string
-  default     = "db/prod/terraform.tfstate"
-}
-
-variable "db_state_region" {
-  description = "Região do bucket de state do repositório de banco de dados."
-  type        = string
-  default     = "us-east-1"
-}
-
-variable "github_repository" {
-  description = "owner/repo autorizado a assumir a role de deploy via OIDC. Vazio desliga o recurso."
-  type        = string
-  default     = "DevKaue/TechChallenge---Infraestrutura-Kubernetes-com-Terraform"
-}
-
 variable "github_app_repository" {
   description = "owner/repo da aplicação autorizado a assumir a role de deploy via OIDC. Vazio desliga o recurso."
   type        = string
@@ -110,12 +83,6 @@ variable "github_lambda_repository" {
   description = "owner/repo da Lambda de autenticação autorizado a assumir a role de deploy via OIDC. Vazio desliga o recurso."
   type        = string
   default     = "DevKaue/TechChallange---Function-Serverless"
-}
-
-variable "github_deploy_policy_arns" {
-  description = "Policies anexadas à role de deploy do CI. O apply do Terraform cria VPC, IAM, EKS e escreve no state S3, o que exige permissão ampla. Restrinja numa conta real."
-  type        = list(string)
-  default     = ["arn:aws:iam::aws:policy/AdministratorAccess"]
 }
 
 variable "lab_role_arn" {

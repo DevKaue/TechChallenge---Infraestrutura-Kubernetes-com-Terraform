@@ -2,23 +2,26 @@
 # token OIDC por credenciais temporárias da AWS. Nada de AWS_ACCESS_KEY_ID em
 # secret de repositório.
 #
-# UM ROLE POR REPOSITÓRIO, cada um restrito à condição `repo:<owner>/<repo>:*`.
-# Sem essa condição QUALQUER repo do GitHub poderia assumir a role.
+# UM ROLE POR REPOSITÓRIO QUE AINDA DEPLOYA POR ACTIONS (aplicação e Lambda).
+# Cada um restrito à condição `repo:<owner>/<repo>:*` — sem ela QUALQUER repo do
+# GitHub poderia assumir a role.
+#
+# O Terraform DESTE repositório NÃO tem mais role: o plan/apply roda no HCP
+# Terraform (ver versions.tf), não em GitHub Actions.
 #
 # O provider OIDC é UMA VEZ por conta e fica neste repo, porque é ele (o
 # primeiro da ordem de criação) que guarda o thumbprint. O infra-db NÃO recria o
 # provider: usa `data "aws_iam_openid_connect_provider"` deste mesmo provider.
-
+#
 # AWS Academy (local.lab_mode): nada deste arquivo é criado — a conta não
 # permite provider OIDC nem roles. Os pipelines usam as credenciais temporárias
 # do lab (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY e AWS_SESSION_TOKEN): no
 # workspace do Terraform Cloud e nos secrets do GitHub do repositório do app.
 locals {
-  github_k8s_role_enabled    = !local.lab_mode && var.github_repository != ""
   github_app_role_enabled    = !local.lab_mode && var.github_app_repository != ""
   github_lambda_role_enabled = !local.lab_mode && var.github_lambda_repository != ""
 
-  oidc_enabled = local.github_k8s_role_enabled || local.github_app_role_enabled || local.github_lambda_role_enabled
+  oidc_enabled = local.github_app_role_enabled || local.github_lambda_role_enabled
 }
 
 data "tls_certificate" "github" {
@@ -37,116 +40,7 @@ resource "aws_iam_openid_connect_provider" "github" {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 1. Terraform DESTE repositório (techchallenge-infra-k8s)
-#    Executa `terraform apply` do cluster (VPC, EKS, ECR, ALB Controller,
-#    addons). Precisa de permissão ampla de rede/compute/IAM.
-# ─────────────────────────────────────────────────────────────────────────────
-data "aws_iam_policy_document" "assume_k8s" {
-  count = local.github_k8s_role_enabled ? 1 : 0
-
-  statement {
-    effect  = "Allow"
-    actions = ["sts:AssumeRoleWithWebIdentity"]
-
-    principals {
-      type        = "Federated"
-      identifiers = [aws_iam_openid_connect_provider.github[0].arn]
-    }
-
-    condition {
-      test     = "StringEquals"
-      variable = "token.actions.githubusercontent.com:aud"
-      values   = ["sts.amazonaws.com"]
-    }
-
-    condition {
-      test     = "StringLike"
-      variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_repository}:*"]
-    }
-  }
-}
-
-resource "aws_iam_role" "github_terraform_k8s" {
-  count = local.github_k8s_role_enabled ? 1 : 0
-
-  name               = "${local.name}-github-terraform-k8s"
-  assume_role_policy = data.aws_iam_policy_document.assume_k8s[0].json
-
-  tags = local.tags
-}
-
-# Deploy do cluster exige permissão ampla de rede/compute/IAM. Em produção
-# real, restringe por recurso — aqui a prioridade é o fluxo funcionar e o
-# princípio "só este repo assume" estar garantido pelo OIDC.
-data "aws_iam_policy_document" "github_terraform_k8s" {
-  count = local.github_k8s_role_enabled ? 1 : 0
-
-  statement {
-    effect = "Allow"
-    actions = [
-      "ec2:*",
-      "eks:*",
-      "ecr:*",
-      "iam:CreateRole",
-      "iam:PutRolePolicy",
-      "iam:AttachRolePolicy",
-      "iam:DetachRolePolicy",
-      "iam:DeleteRole",
-      "iam:DeleteRolePolicy",
-      "iam:GetRole",
-      "iam:GetRolePolicy",
-      "iam:ListRolePolicies",
-      "iam:ListAttachedRolePolicies",
-      "iam:PassRole",
-      "iam:TagRole",
-      "iam:UntagRole",
-      "iam:CreatePolicy",
-      "iam:GetPolicy",
-      "iam:DeletePolicy",
-      "iam:CreatePolicyVersion",
-      "iam:DeletePolicyVersion",
-      "kms:DescribeKey",
-      "logs:DescribeLogGroups",
-      "logs:CreateLogGroup",
-      "logs:PutRetentionPolicy",
-    ]
-    resources = ["*"]
-  }
-
-  # Parâmetros SSM só sob o prefixo do projeto (secrets.tf). DescribeParameters
-  # não aceita restrição por recurso, por isso fica num statement à parte.
-  statement {
-    effect = "Allow"
-    actions = [
-      "ssm:PutParameter",
-      "ssm:GetParameter",
-      "ssm:GetParameters",
-      "ssm:DeleteParameter",
-      "ssm:AddTagsToResource",
-      "ssm:RemoveTagsFromResource",
-      "ssm:ListTagsForResource",
-    ]
-    resources = ["arn:aws:ssm:${var.region}:${data.aws_caller_identity.current.account_id}:parameter/${var.project}/*"]
-  }
-
-  statement {
-    effect    = "Allow"
-    actions   = ["ssm:DescribeParameters"]
-    resources = ["*"]
-  }
-}
-
-resource "aws_iam_role_policy" "github_terraform_k8s" {
-  count = local.github_k8s_role_enabled ? 1 : 0
-
-  name   = "deploy"
-  role   = aws_iam_role.github_terraform_k8s[0].id
-  policy = data.aws_iam_policy_document.github_terraform_k8s[0].json
-}
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 2. Deploy da APLICAÇÃO (repo techchallenge-app)
+# 1. Deploy da APLICAÇÃO (repo techchallenge-app)
 #    Push no ECR e `kubectl apply -k` no cluster. A autorização DENTRO do
 #    cluster vem do access entry abaixo (IAM autentica, RBAC/ClusterAdmin
 #    autoriza). É a role que o app repo configura como AWS_DEPLOY_ROLE.
@@ -261,7 +155,7 @@ resource "aws_eks_access_policy_association" "github_app_deploy" {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 3. Deploy da LAMBDA (repo techchallenge-lambda)
+# 2. Deploy da LAMBDA (repo techchallenge-lambda)
 #    `sam deploy` = CloudFormation que cria função, role e VPC config. Sem API
 #    Gateway da AWS: quem expõe a Lambda é o Kong (kong.tf), via plugin
 #    aws-lambda. A role é assumida pelo repo DONO da lambda.

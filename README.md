@@ -1,10 +1,10 @@
 # Tech Challenge - Infraestrutura Kubernetes (Terraform)
 
 **Repositório 2 do projeto.** Infrastructure as Code (Terraform) da camada
-Kubernetes na AWS: **VPC, ECR, EKS, addons, ALB Controller, IAM/OIDC e o
-namespace/Secret da aplicação**. Todo o ciclo de vida (criar, atualizar e
-destruir) é versionado aqui e executado por **GitHub Actions**, com deploy
-automático das branches de **homologação** e **produção**.
+Kubernetes na AWS: **VPC, ECR, EKS, addons, ALB Controller, Kong (API Gateway) e
+IAM/OIDC**. Todo o ciclo de vida (criar, atualizar e destruir) é versionado aqui
+e executado pelo **HCP Terraform (Terraform Cloud)**, com um workspace por
+ambiente.
 
 ## Escopo
 
@@ -14,64 +14,110 @@ contém o código da aplicação, os manifestos Kustomize, nem o banco de dados:
 | Repositório | Responsabilidade |
 |---|---|
 | 1. Lambda | Function serverless |
-| **2. Infraestrutura Kubernetes (este)** | VPC, ECR, EKS, addons, ALB Controller, IAM/OIDC, namespace/Secret |
+| **2. Infraestrutura Kubernetes (este)** | VPC, ECR, EKS, addons, ALB Controller, Kong, IAM/OIDC |
 | 3. Infraestrutura do Banco Gerenciado | RDS PostgreSQL (Terraform) |
 | 4. Aplicação principal em Kubernetes | Código da API, Dockerfile, manifestos Kustomize e deploy no cluster |
 
 ### Contrato com os outros repositórios
 
-- **Lê do repositório 3** (remote state S3): `db_endpoint`, `db_name`,
-  `db_username`, `db_password` — usados para montar o `DATABASE_URL` do Secret
-  da aplicação. Aplique o repositório 3 **antes** deste.
 - **Expõe para os repositórios 3 e 4**: `vpc_id`, `private_subnet_ids`,
-  `node_security_group_id`, `vpc_cidr`, `ecr_url`, `cluster_name`,
-  `github_deploy_role_arn`.
+  `node_security_group_id`, `vpc_cidr`, `ecr_url`, `ecr_repository_name`,
+  `cluster_name`, `github_app_deploy_role_arn`, `github_lambda_deploy_role_arn`
+  e `jwt_secret_ssm_path`.
+- O **namespace** e o **Secret** da aplicação são criados pelo overlay Kustomize
+  do repositório 4 (dono único), não por este repositório. O segredo JWT
+  compartilhado é publicado aqui no SSM (`jwt_secret_ssm_path`), consumido pela
+  Lambda, pelo app e pelo Kong.
+- A **Lambda** (repo 1) e a **aplicação** (repo 4) continuam deployando por
+  **GitHub Actions** com OIDC. Este repositório roda no HCP Terraform.
 
 ## Estrutura
 
 ```
 terraform/            toda a infraestrutura como código
-├── versions.tf       required_version, providers e backend S3
-├── providers.tf      aws / kubernetes / helm
+├── versions.tf       required_version, providers e bloco cloud (HCP Terraform)
+├── providers.tf      aws / helm
 ├── vpc.tf            VPC 3 AZ, NAT único, tags de subnet para o ALB
 ├── ecr.tf            repositório com tag imutável e lifecycle
 ├── eks.tf            cluster 1.32, managed node group, access entries
 ├── addons.tf         vpc-cni (network policy), coredns, kube-proxy,
 │                     metrics-server, pod-identity, Container Insights
 ├── alb-controller.tf IRSA + Helm do AWS Load Balancer Controller
-├── secrets.tf        namespace + Secret com as 4 chaves exigidas pela API
-├── remote-state.tf   leitura dos outputs do repositório de banco
-├── github-oidc.tf    OIDC provider e role de deploy (sem chave estática)
+├── kong.tf           Kong Ingress Controller DB-less + NLB + permissão da Lambda
+├── secrets.tf        segredo JWT compartilhado no SSM
+├── github-oidc.tf    OIDC provider + roles de deploy (app e Lambda)
 └── outputs.tf        valores consumidos pelos repositórios 3 e 4
-.github/workflows/    ci.yml (validação) e deploy.yml (apply por ambiente)
+.github/workflows/    ci.yml (fmt + validate em PR)
 ```
 
-## CI/CD
+## HCP Terraform (CI/CD)
 
-| Workflow | Dispara em | Faz |
+O `plan`/`apply` roda no **HCP Terraform**, não mais em GitHub Actions. Há um
+**workspace por ambiente**, casados pela tag `techchallenge-infra` do bloco
+`cloud` (`terraform/versions.tf`):
+
+| Workspace | `environment` | Observação |
 |---|---|---|
-| `ci.yml` | PR e push em `develop`/`main` | `terraform fmt -check`, `init -backend=false`, `validate` e scan de misconfiguração (trivy) |
-| `deploy.yml` | push em `develop` (homolog) e `main` (produção), ou manual | `terraform init` com state por ambiente, `plan` e `apply` |
+| `techchallenge-infra-prod` | `prod` | produção |
+| `techchallenge-infra-staging` | `staging` | precisa de apply próprio antes do deploy de homologação do app |
 
-O deploy autentica por **OIDC** — não existe `AWS_ACCESS_KEY_ID` no repositório.
-Configure em *Settings → Secrets and variables → Actions*:
+Passos:
 
-| Tipo | Nome | Valor |
-|---|---|---|
-| Secret | `AWS_DEPLOY_ROLE` | `terraform output -raw github_deploy_role_arn` |
-| Variable | `AWS_REGION` | `terraform output -raw region` |
+1. Crie os workspaces no HCP Terraform com a tag `techchallenge-infra`.
+2. O runner padrão do TFC **não tem o AWS CLI**, e o provider Helm autentica com
+   `aws eks get-token` (`terraform/providers.tf`). Configure **Execution Mode →
+   Agent** e registre um **agent self-hosted** com o AWS CLI instalado.
+3. Variáveis do workspace:
+   - **Env (sensitive)**: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
+     `AWS_SESSION_TOKEN` — credenciais temporárias do Academy, renovadas a cada
+     sessão (~4h).
+   - **Terraform**: `environment` (`prod`/`staging`),
+     `lab_role_arn = arn:aws:iam::<conta>:role/LabRole` e
+     `node_instance_types = ["t3.medium"]`.
+4. Conecte o VCS (GitHub) do workspace para plan/apply automáticos, ou rode pelo
+   CLI definindo `TF_WORKSPACE`.
 
-O environment `production` é usado no deploy de `main` — crie-o em
-*Settings → Environments* para exigir aprovação manual. O environment `homolog`
-atende `develop`.
+> O campo `organization` do bloco `cloud` está como `REPLACE_ORG`: troque pelo
+> slug da sua organização no `app.terraform.io`.
+
+## Migração do state S3 existente
+
+O state sai do bucket S3 `techchallenge-fiap-v1` e passa para o HCP Terraform.
+Preservar o state mantém o `random_password.jwt_secret` já gravado — recriá-lo
+rotacionaria o segredo e quebraria os tokens da Lambda, do app e do Kong.
+
+Por workspace, uma vez:
+
+```powershell
+terraform login
+$env:TF_WORKSPACE = "techchallenge-infra-prod"
+Set-Location terraform
+terraform init -migrate-state   # responda que sim para copiar o state ao TFC
+```
+
+Depois, remova do state os recursos que saíram do código, para o Terraform **não
+destruir** o namespace/Secret da aplicação (que agora pertencem ao Kustomize):
+
+```powershell
+terraform state rm 'kubernetes_namespace.app'      # se existir no state
+terraform state rm 'kubernetes_secret.app'         # se existir no state
+terraform state rm 'random_password.password_salt'
+terraform state rm 'random_password.webhook_secret'
+```
+
+Confirme com `terraform plan` que nenhuma destruição indevida aparece antes de
+aplicar.
 
 ## Regras de proteção (configurar no GitHub)
 
 - Branch `main` e `develop` protegidas — **sem push direto**.
-- Merge somente via **Pull Request** (com CI verde obrigatório).
-- Deploy automático: `develop` → homologação, `main` → produção.
+- Merge somente via **Pull Request** (com o `ci.yml` verde obrigatório).
+- O deploy da infraestrutura é disparado pelo HCP Terraform ao detectar o merge.
 
 ## Uso local
 
-Veja [`terraform/README.md`](terraform/README.md) para pré-requisitos, bootstrap
-do backend S3, `plan`/`apply` e `destroy`.
+Pré-requisitos: Terraform `~> 1.10`, AWS CLI autenticado (credenciais do lab) e
+`kubectl`. Para operar contra um workspace do TFC, exporte `TF_WORKSPACE` com o
+nome do workspace (o valor precisa estar contido nas tags `techchallenge-infra`)
+e rode `terraform init`, `terraform plan` e `terraform apply`. Para destruir a
+infraestrutura, `terraform destroy`.

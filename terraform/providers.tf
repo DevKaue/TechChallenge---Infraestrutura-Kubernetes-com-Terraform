@@ -6,22 +6,16 @@ provider "aws" {
   }
 }
 
-# Helm e Kubernetes autenticam via `aws eks get-token`, não por token de data
-# source: token de data source expira em 15 min e quebra applies longos no meio.
+# O provider `kubernetes` do Terraform foi removido junto com os recursos
+# kubernetes_namespace/kubernetes_secret: o namespace e o Secret da aplicação
+# são criados pelo overlay Kustomize do repositório da app, dono único deles.
 #
-# Sem este provider configurado, os kubernetes_namespace/kubernetes_secret do
-# secrets.tf tentariam o cluster em localhost.
-provider "kubernetes" {
-  host                   = module.eks.cluster_endpoint
-  cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
-
-  exec {
-    api_version = "client.authentication.k8s.io/v1beta1"
-    command     = "aws"
-    args        = ["eks", "get-token", "--cluster-name", module.eks.cluster_name, "--region", var.region]
-  }
-}
-
+# O Helm autentica via `aws eks get-token`, não por token de data source: token
+# de data source expira em 15 min e quebra applies longos no meio.
+#
+# ATENÇÃO (HCP Terraform): o runner padrão do TFC NÃO tem o AWS CLI, então este
+# `exec` exige execução por um HCP Terraform Agent self-hosted com AWS CLI e as
+# credenciais do lab. Ver README.
 provider "helm" {
   kubernetes {
     host                   = module.eks.cluster_endpoint

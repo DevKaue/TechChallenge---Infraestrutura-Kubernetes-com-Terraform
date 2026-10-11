@@ -6,8 +6,9 @@ on:
   push:
     branches: [main, develop]
 
+# O deploy (plan/apply) roda no HCP Terraform, não aqui. Este workflow é só o
+# gate de PR: formatação e validação estática, sem tocar o backend/cloud.
 permissions:
-  id-token: write
   contents: read
 
 env:
