@@ -1,5 +1,5 @@
 terraform {
-  required_version = "1.16.5"
+  required_version = ">= 1.6, < 2.0"
 
   required_providers {
     aws    = { source = "hashicorp/aws", version = "~> 5.90" }
@@ -9,10 +9,10 @@ terraform {
   }
 
   cloud {
-    organization = "tech-challenge-fiap-5546"
+    organization = "tech-challenge-infra"
 
     workspaces {
-      name = "tech-challenge-fiap"
+      tags = ["techchallenge-infra"]
     }
   }
 }

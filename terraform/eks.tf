@@ -17,7 +17,7 @@ module "eks" {
   # [PATCH FIAP lab] ARN do criador do cluster. No lab é a role voclabs
   # (arn:aws:iam::<conta>:role/voclabs), que passa a admin do cluster via
   # access entry — mesmo padrão do exemplo da aula (access-entry.tf).
-  cluster_creator_arn = var.cluster_creator_arn
+  cluster_creator_arn = local.cluster_creator_arn
 
   vpc_id     = module.vpc.vpc_id
   subnet_ids = module.vpc.private_subnets
@@ -29,7 +29,7 @@ module "eks" {
   # AWS Academy: role do cluster = LabRole, e sem provider OIDC (o IRSA fica
   # desligado; os controllers usam a credencial do nó).
   create_iam_role = !local.lab_mode
-  iam_role_arn    = local.lab_mode ? var.lab_role_arn : null
+  iam_role_arn    = local.lab_mode ? local.lab_role_arn : null
   enable_irsa     = !local.lab_mode
 
   # Access entries (API), não o ConfigMap aws-auth — que está em depreciação.
@@ -74,7 +74,7 @@ module "eks" {
       # AWS Academy: role dos nós = LabRole. Nesse modo o anexo de policy abaixo
       # é ignorado pelo módulo, e as permissões do CloudWatch são as da LabRole.
       create_iam_role = !local.lab_mode
-      iam_role_arn    = local.lab_mode ? var.lab_role_arn : null
+      iam_role_arn    = local.lab_mode ? local.lab_role_arn : null
 
       iam_role_additional_policies = {
         # O agente do Container Insights publica métricas e logs com a role do

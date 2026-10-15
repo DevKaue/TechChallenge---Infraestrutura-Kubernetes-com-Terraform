@@ -2,6 +2,12 @@ data "aws_availability_zones" "available" {
   state = "available"
 }
 
+# A conta AWS NÃO é hardcoded: resolve das credenciais que rodam o
+# plan/apply — no HCP Terraform, são as env vars do workspace.
+# sts:GetCallerIdentity é permitido por qualquer credencial válida,
+# inclusive a sessão temporária do Academy.
+data "aws_caller_identity" "current" {}
+
 locals {
   name = "${var.project}-${var.environment}"
 
@@ -15,8 +21,20 @@ locals {
     ManagedBy   = "terraform"
   }
 
-  # AWS Academy (Learner Lab): sem iam:CreateRole, iam:CreatePolicy nem provider
-  # OIDC. Com lab_role_arn preenchido, cluster, nós e controllers usam a LabRole,
-  # e nenhum recurso de IAM é criado.
-  lab_mode = var.lab_role_arn != ""
+  # ID da conta: variável preenchida > credenciais do run. Único dado
+  # por-conta do código, e nem precisa virar variável no workspace.
+  account_id = var.aws_account_id != "" ? var.aws_account_id : data.aws_caller_identity.current.account_id
+
+  # AWS Academy (Learner Lab): sem iam:CreateRole, iam:CreatePolicy nem
+  # provider OIDC. Com lab_mode, cluster, nós e controllers usam a
+  # LabRole, e nenhum recurso de IAM é criado.
+  lab_mode = var.lab_mode
+
+  # ARNs completas, montadas com a conta resolvida. As variáveis
+  # *_arn ainda permitem override manual (ex.: LabRole com outro nome).
+  lab_role_arn = var.lab_role_arn != "" ? var.lab_role_arn : "arn:aws:iam::${local.account_id}:role/LabRole"
+
+  cluster_creator_arn = var.cluster_creator_arn != null ? var.cluster_creator_arn : (
+    local.lab_mode ? "arn:aws:iam::${local.account_id}:role/voclabs" : null
+  )
 }

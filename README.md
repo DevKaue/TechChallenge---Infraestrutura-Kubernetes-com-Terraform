@@ -75,9 +75,13 @@ Passos:
      `AWS_SESSION_TOKEN` — credenciais temporárias do Academy, renovadas a cada
      sessão (~4h).
    - **Terraform**: `environment` (`prod`/`staging`),
-     `lab_role_arn = arn:aws:iam::<conta>:role/LabRole`,
-     `cluster_creator_arn = arn:aws:iam::<conta>:role/voclabs` e
-     `node_instance_types = ["t3.medium"]`.
+     `lab_mode = true` e `node_instance_types = ["t3.medium"]`.
+     O ID da conta **não precisa** de variável: `main.tf` monta
+     `arn:aws:iam::<conta>:role/LabRole` e `.../role/voclabs`
+     automaticamente com a conta das próprias credenciais do run
+     (`data.aws_caller_identity`). Só defina `aws_account_id` (ou as
+     ARNs completas `lab_role_arn`/`cluster_creator_arn`) se a LabRole
+     tiver nome diferente.
 4. Conecte o VCS (GitHub) do workspace para plan/apply automáticos, ou rode pelo
    CLI definindo `TF_WORKSPACE`.
 
@@ -130,7 +134,8 @@ aplicar.
 
 ## Uso local
 
-Pré-requisitos: Terraform `~> 1.10`, AWS CLI autenticado (credenciais do lab) e
+Pré-requisitos: Terraform `1.16.5` (exatamente a versão do
+`required_version`), AWS CLI autenticado (credenciais do lab) e
 `kubectl`. Para operar contra um workspace do TFC, exporte `TF_WORKSPACE` com o
 nome do workspace (o valor precisa estar contido nas tags `techchallenge-infra`)
 e rode `terraform init`, `terraform plan` e `terraform apply`. Para destruir a

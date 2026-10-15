@@ -2,16 +2,23 @@
 # token OIDC por credenciais temporárias da AWS. Nada de AWS_ACCESS_KEY_ID em
 # secret de repositório.
 #
-# UM ROLE POR REPOSITÓRIO QUE AINDA DEPLOYA POR ACTIONS (aplicação e Lambda).
-# Cada um restrito à condição `repo:<owner>/<repo>:*` — sem ela QUALQUER repo do
-# GitHub poderia assumir a role.
+# UM ROLE POR REPOSITÓRIO QUE AINDA DEPLOYA POR ACTIONS (aplicação e Lambda), e
+# UM CONJUNTO POR AMBIENTE (o nome da role usa local.name). Cada role só pode ser
+# assumida por jobs do GitHub Environment correspondente:
+#   - workspace staging → repo:<owner>/<repo>:environment:staging
+#   - workspace prod    → repo:<owner>/<repo>:environment:production
+# Sem essa restrição, QUALQUER branch (ou PR) do repositório assumiria a role, e
+# um workflow de staging poderia assumir a role de produção. Por isso os jobs de
+# deploy PRECISAM declarar `environment: staging` ou `environment: production`.
 #
 # O Terraform DESTE repositório NÃO tem mais role: o plan/apply roda no HCP
 # Terraform (ver versions.tf), não em GitHub Actions.
 #
-# O provider OIDC é UMA VEZ por conta e fica neste repo, porque é ele (o
-# primeiro da ordem de criação) que guarda o thumbprint. O infra-db NÃO recria o
-# provider: usa `data "aws_iam_openid_connect_provider"` deste mesmo provider.
+# O provider OIDC é UM POR CONTA AWS, e staging e prod compartilham a conta. Por
+# isso só o workspace de prod o cria; o de staging apenas o consulta
+# (data source). Consequência: aplique o prod ANTES do staging na primeira vez
+# (ou o staging falha por não encontrar o provider). O infra-db também NÃO
+# recria o provider: usa `data "aws_iam_openid_connect_provider"`.
 #
 # AWS Academy (local.lab_mode): nada deste arquivo é criado — a conta não
 # permite provider OIDC nem roles. Os pipelines usam as credenciais temporárias
@@ -22,21 +29,41 @@ locals {
   github_lambda_role_enabled = !local.lab_mode && var.github_lambda_repository != ""
 
   oidc_enabled = local.github_app_role_enabled || local.github_lambda_role_enabled
+
+  # Só o prod cria o provider; os demais ambientes reaproveitam o da conta.
+  oidc_create = local.oidc_enabled && var.environment == "prod"
+  oidc_lookup = local.oidc_enabled && var.environment != "prod"
+
+  # Nome do GitHub Environment que pode assumir as roles deste workspace.
+  github_environment = var.environment == "prod" ? "production" : var.environment
+
+  # ARN do provider, venha de onde vier. one() evita erro de índice quando um dos
+  # dois lados tem count = 0.
+  github_oidc_provider_arn = one(concat(
+    aws_iam_openid_connect_provider.github[*].arn,
+    data.aws_iam_openid_connect_provider.github[*].arn,
+  ))
 }
 
 data "tls_certificate" "github" {
-  count = local.oidc_enabled ? 1 : 0
+  count = local.oidc_create ? 1 : 0
   url   = "https://token.actions.githubusercontent.com"
 }
 
 resource "aws_iam_openid_connect_provider" "github" {
-  count = local.oidc_enabled ? 1 : 0
+  count = local.oidc_create ? 1 : 0
 
   url             = "https://token.actions.githubusercontent.com"
   client_id_list  = ["sts.amazonaws.com"]
   thumbprint_list = [data.tls_certificate.github[0].certificates[0].sha1_fingerprint]
 
   tags = local.tags
+}
+
+# Staging (e qualquer ambiente que não seja prod): usa o provider criado pelo prod.
+data "aws_iam_openid_connect_provider" "github" {
+  count = local.oidc_lookup ? 1 : 0
+  url   = "https://token.actions.githubusercontent.com"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -54,7 +81,7 @@ data "aws_iam_policy_document" "assume_app" {
 
     principals {
       type        = "Federated"
-      identifiers = [aws_iam_openid_connect_provider.github[0].arn]
+      identifiers = [local.github_oidc_provider_arn]
     }
 
     condition {
@@ -63,10 +90,11 @@ data "aws_iam_policy_document" "assume_app" {
       values   = ["sts.amazonaws.com"]
     }
 
+    # Só jobs que rodam no GitHub Environment deste ambiente.
     condition {
-      test     = "StringLike"
+      test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_app_repository}:*"]
+      values   = ["repo:${var.github_app_repository}:environment:${local.github_environment}"]
     }
   }
 }
@@ -110,11 +138,12 @@ data "aws_iam_policy_document" "github_app_deploy" {
   }
 
   # Lê o DATABASE_URL que o repo infra-db grava no Secrets Manager, para montar
-  # o .env.secret do overlay no deploy.
+  # o .env.secret do overlay no deploy. O nome do segredo segue o padrão
+  # <project>-<ambiente>/rds (ex.: techchallenge-staging/rds).
   statement {
     effect    = "Allow"
     actions   = ["secretsmanager:GetSecretValue"]
-    resources = ["arn:aws:secretsmanager:${var.region}:*:secret:${local.name}/rds*"]
+    resources = ["arn:aws:secretsmanager:${var.region}:${local.account_id}:secret:${local.name}/rds*"]
   }
 
   # Lê o segredo JWT compartilhado (secrets.tf) para montar o Secret do app e as
@@ -169,7 +198,7 @@ data "aws_iam_policy_document" "assume_lambda" {
 
     principals {
       type        = "Federated"
-      identifiers = [aws_iam_openid_connect_provider.github[0].arn]
+      identifiers = [local.github_oidc_provider_arn]
     }
 
     condition {
@@ -178,10 +207,11 @@ data "aws_iam_policy_document" "assume_lambda" {
       values   = ["sts.amazonaws.com"]
     }
 
+    # Só jobs que rodam no GitHub Environment deste ambiente.
     condition {
-      test     = "StringLike"
+      test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_lambda_repository}:*"]
+      values   = ["repo:${var.github_lambda_repository}:environment:${local.github_environment}"]
     }
   }
 }
@@ -195,6 +225,12 @@ resource "aws_iam_role" "github_lambda_deploy" {
   tags = local.tags
 }
 
+# ATENÇÃO (trade-off conhecido): o `sam deploy` cria a role de execução da
+# função, então esta policy precisa de iam:CreateRole e iam:AttachRolePolicy. Com
+# resources = ["*"], quem controla o pipeline consegue criar uma role com
+# privilégios arbitrários. Aceitável neste desafio (a role só é assumível por um
+# GitHub Environment do repo da Lambda); em produção real, restrinja os recursos
+# de IAM ao prefixo do stack e adicione uma permissions boundary.
 data "aws_iam_policy_document" "github_lambda_deploy" {
   count = local.github_lambda_role_enabled ? 1 : 0
 

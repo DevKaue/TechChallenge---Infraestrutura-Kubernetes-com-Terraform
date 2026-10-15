@@ -1,7 +1,14 @@
 resource "aws_ecr_repository" "api" {
-  # `-api` para bater com o nome da imagem no Kustomize (techchallenge-api) e
-  # com o que o CI publica. Nome divergente aqui vira variável errada no GitHub.
-  name = "${var.project}-api"
+  # Um repositório por ambiente (techchallenge-staging-api, techchallenge-prod-api):
+  # staging e prod dividem a conta AWS, e um nome fixo faria o segundo apply falhar
+  # com RepositoryAlreadyExistsException.
+  #
+  # O nome da imagem no Kustomize (techchallenge-api) NÃO precisa bater com este
+  # nome: o CI deve apontar a imagem para o output `ecr_url` do ambiente, por
+  # exemplo `kustomize edit set image techchallenge-api=<ecr_url>:<sha>`. O nome do
+  # repositório vira a variable ECR_REPOSITORY do GitHub Environment (output
+  # `ecr_repository_name`).
+  name = "${local.name}-api"
 
   # Tag imutável: o CI publica por $GIT_SHA. Sem isto alguém pode repontar uma
   # tag já implantada e o rollback deixa de ser determinístico.
