@@ -1,0 +1,183 @@
+name: deploy
+
+# main aplica prod; develop aplica staging. A homolog não faz deploy: é o mesmo
+# modelo do banco, da Lambda e do app.
+#
+# Staging só roda com a variável STAGING_ENABLED=true no repositório: ele dobra o
+# custo (EKS, NAT, NLB) e sobe só quando for usado. Sem a variável, o push em
+# develop passa só pelo ci.yml.
+#
+# Dois jobs, para quem aprova produção ver o plan ANTES de aprovar: o `plan`
+# roda sem environment e publica o plano no resumo do run; o `apply` usa o
+# environment (`staging` ou `production`), cujo gate de revisores segura o job
+# antes de ele começar.
+on:
+  push:
+    branches: [develop, main]
+  workflow_dispatch:
+
+# Um apply por ambiente de cada vez, sem cancelar o que está rodando: matar um
+# apply no meio deixa o lock do state preso e o cluster pela metade.
+concurrency:
+  group: deploy-${{ github.ref == 'refs/heads/main' && 'prod' || 'staging' }}
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  # Um valor só escolhe o tfvars E a key do state: é o que impede o plan de
+  # staging de rodar contra o state de prod.
+  AMBIENTE: ${{ github.ref == 'refs/heads/main' && 'prod' || 'staging' }}
+  TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+
+jobs:
+  plan:
+    name: Plan
+    if: github.ref == 'refs/heads/main' || vars.STAGING_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      # Sem environment, este job lê os secrets do REPOSITÓRIO. É de propósito:
+      # com os secrets só no environment `production`, o plan esperaria a mesma
+      # aprovação que ele existe para informar. OIDC quando há AWS_DEPLOY_ROLE;
+      # no AWS Academy não há como criar a role nem o provider OIDC, então valem
+      # as credenciais TEMPORÁRIAS do lab (com session token). Preencha um dos
+      # dois conjuntos, nunca os dois.
+      - name: Credenciais AWS (OIDC ou lab)
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE }}
+          aws-access-key-id: ${{ secrets.AWS_LAB_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_LAB_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_LAB_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+        with:
+          terraform_version: '1.16.5'
+          terraform_wrapper: false
+
+      # Sem a variável, o init pediria o bucket interativamente e falharia com
+      # uma mensagem que não diz o que configurar.
+      - name: Bucket do state configurado
+        run: |
+          if [ -z "$TF_STATE_BUCKET" ]; then
+            echo "::error::Defina a variável TF_STATE_BUCKET (Settings → Secrets and variables → Actions → Variables). Valor: output bucket_name do bootstrap/."
+            exit 1
+          fi
+
+      - name: Terraform init
+        run: |
+          terraform init -input=false \
+            -backend-config="bucket=$TF_STATE_BUCKET" \
+            -backend-config="key=k8s/$AMBIENTE/terraform.tfstate"
+
+      - name: Terraform plan
+        run: terraform plan -input=false -no-color -var-file="envs/$AMBIENTE.tfvars" -out=tfplan
+
+      - name: O plan não destrói recurso protegido
+        run: ../.github/scripts/conferir-plan.sh tfplan mudancas.json
+
+      # `terraform show` mascara os valores sensíveis, então o segredo JWT não
+      # vai para o resumo do run.
+      - name: Plano no resumo do run
+        run: |
+          {
+            echo "## Plan de \`$AMBIENTE\`"
+            echo '```'
+            terraform show -no-color tfplan
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Só endereço e ação de cada recurso. O tfplan não sobe como artifact: o
+      # repositório é público e o plano carrega o segredo JWT em claro.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mudancas-${{ env.AMBIENTE }}
+          path: terraform/mudancas.json
+          retention-days: 1
+
+  apply:
+    name: Apply
+    needs: plan
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'staging' }}
+    defaults:
+      run:
+        working-directory: terraform
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Credenciais AWS (OIDC ou lab)
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE }}
+          aws-access-key-id: ${{ secrets.AWS_LAB_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_LAB_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_LAB_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+        with:
+          terraform_version: '1.16.5'
+          terraform_wrapper: false
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: mudancas-${{ env.AMBIENTE }}
+          path: aprovado
+
+      - name: Terraform init
+        run: |
+          terraform init -input=false \
+            -backend-config="bucket=$TF_STATE_BUCKET" \
+            -backend-config="key=k8s/$AMBIENTE/terraform.tfstate"
+
+      # Planeja de novo e só aplica se o plano for o MESMO que foi aprovado: se
+      # algo mudou no state enquanto o gate esperava, o run para em vez de
+      # aplicar o que ninguém viu.
+      - name: Terraform plan
+        run: terraform plan -input=false -no-color -var-file="envs/$AMBIENTE.tfvars" -out=tfplan
+
+      - name: O plan não destrói recurso protegido e é o que foi aprovado
+        run: |
+          ../.github/scripts/conferir-plan.sh tfplan mudancas.json
+          if ! diff -u "$GITHUB_WORKSPACE/aprovado/mudancas.json" mudancas.json; then
+            echo "::error::O plan mudou desde o job de plan. Rode o deploy de novo e revise o plano novo."
+            exit 1
+          fi
+
+      # O EKS leva ~20 min para subir. Com as credenciais do lab, comece o deploy
+      # com a sessão recém-aberta: se elas expirarem no meio, o apply falha e o
+      # próximo run continua de onde parou (o state guarda o que já foi criado).
+      - name: Terraform apply
+        run: terraform apply -input=false tfplan
+
+      # O que os outros repositórios precisam configurar depois do apply. O
+      # hostname do NLB muda a cada criação do cluster, e é o KONG_URL da Lambda
+      # e o endereço público da API.
+      - name: Resumo para os outros repositórios
+        run: |
+          cluster=$(terraform output -raw cluster_name)
+          aws eks update-kubeconfig --name "$cluster" --region "$AWS_REGION" >/dev/null
+          kong=$(kubectl -n kong get svc kong-gateway-proxy \
+            -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)
+          {
+            echo "## Infra \`$AMBIENTE\` aplicada"
+            echo ""
+            echo "| Item | Valor |"
+            echo "|---|---|"
+            echo "| Cluster (EKS_CLUSTER_NAME do app) | \`$cluster\` |"
+            echo "| Repositório ECR (ECR_REPOSITORY do app) | \`$(terraform output -raw ecr_repository_name)\` |"
+            echo "| CIDR da VPC (NetworkPolicy do app) | \`$(terraform output -raw vpc_cidr)\` |"
+            echo "| Kong (KONG_URL da Lambda) | \`${kong:-NLB ainda sem endereço; rode de novo o comando kong_proxy_hostname_command}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -14,6 +14,7 @@ opencode.json
 *.tfstate.*
 *.tfvars
 !terraform/example.tfvars
+!terraform/envs/*.tfvars
 **/.terraform/
 tf*plan*
 tfdestroy*

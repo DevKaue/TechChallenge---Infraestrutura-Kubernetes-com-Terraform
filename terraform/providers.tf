@@ -11,11 +11,9 @@ provider "aws" {
 # são criados pelo overlay Kustomize do repositório da app, dono único deles.
 #
 # O Helm autentica via `aws eks get-token`, não por token de data source: token
-# de data source expira em 15 min e quebra applies longos no meio.
-#
-# ATENÇÃO (HCP Terraform): o runner padrão do TFC NÃO tem o AWS CLI, então este
-# `exec` exige execução por um HCP Terraform Agent self-hosted com AWS CLI e as
-# credenciais do lab. Ver README.
+# de data source expira em 15 min e quebra applies longos no meio. Precisa do
+# AWS CLI onde o Terraform roda; o runner ubuntu-latest do GitHub Actions já
+# traz.
 provider "helm" {
   kubernetes {
     host                   = module.eks.cluster_endpoint

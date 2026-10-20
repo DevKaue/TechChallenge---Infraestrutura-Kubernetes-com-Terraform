@@ -1,11 +1,11 @@
-# Variáveis do root module. No HCP Terraform a MAIORIA disto vive como variável
-# do workspace (ver README); este arquivo serve para runs locais:
+# Referência de TODAS as variáveis do root module, para runs locais:
 #   terraform plan -var-file=terraform.tfvars
-# Copie para terraform.tfvars (gitignored) e ajuste.
+# Copie para terraform.tfvars (gitignored) e ajuste. O pipeline não usa este
+# arquivo: o deploy.yml lê envs/<env>.tfvars (versionados, um por ambiente).
 
 region      = "us-east-1"
 project     = "techchallenge"
-environment = "prod" # no TFC: prod no workspace de produção, staging no de homologação
+environment = "prod" # prod ou staging; no pipeline vem de envs/<env>.tfvars
 
 # Precisa não colidir com a rede de casa/escritório se um dia houver VPN.
 vpc_cidr = "10.0.0.0/16"
@@ -27,13 +27,12 @@ node_group_size = {
 
 # AWS Academy (Learner Lab): a conta não permite criar roles de IAM.
 # lab_mode = true (default) faz cluster, nós e controllers usarem a
-# LabRole (sem IRSA e sem as roles OIDC do GitHub). No TFC, deixe o
-# default ou defina como variável do workspace.
+# LabRole (sem IRSA e sem as roles OIDC do GitHub).
 lab_mode = true
 
 # ID da conta (12 dígitos). Opcional: vazio resolve sozinho pelas
 # credenciais do run (data.aws_caller_identity) — nada de específico
-# por conta no código nem no workspace. Descomente para fixar:
+# por conta no código nem no pipeline. Descomente para fixar:
 # aws_account_id = "123456789012"
 
 # Overrides manuais, só se LabRole/voclabs tiverem outro nome:

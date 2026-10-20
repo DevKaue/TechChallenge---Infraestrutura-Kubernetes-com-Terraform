@@ -6,8 +6,8 @@ on:
   push:
     branches: [main, develop]
 
-# O deploy (plan/apply) roda no HCP Terraform, não aqui. Este workflow é só o
-# gate de PR: formatação e validação estática, sem tocar o backend/cloud.
+# O deploy (plan/apply) roda no deploy.yml. Este workflow é só o gate de PR:
+# formatação e validação estática, sem credencial e sem tocar o backend.
 permissions:
   contents: read
 
