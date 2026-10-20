@@ -34,8 +34,13 @@ output "private_subnet_ids" {
 }
 
 output "node_security_group_id" {
-  description = "ID do security group dos nós EKS. Autoriza (na ponta do RDS) a porta 5432 vinda dos nós. Consumido pelo repositório techchallenge-infra-db."
+  description = "ID do security group dos nós EKS. Autoriza (na ponta do RDS) a porta 5432 vinda dos nós. O repositório de banco lê do SSM (node_security_group_id_ssm_path), não deste output."
   value       = module.eks.node_security_group_id
+}
+
+output "node_security_group_id_ssm_path" {
+  description = "Parâmetro SSM com o SG dos nós. O repositório de banco libera a 5432 a partir dele."
+  value       = aws_ssm_parameter.node_security_group_id.name
 }
 
 output "github_app_deploy_role_arn" {

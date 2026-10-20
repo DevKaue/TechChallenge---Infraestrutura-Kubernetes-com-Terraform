@@ -86,6 +86,11 @@ resource "helm_release" "kong" {
   # dos 300s padrão para ficar pronto.
   timeout = 600
 
+  # Num upgrade que falha (timeout, credencial do lab expirada no meio), apaga
+  # o que a revisão nova criou. Sem isto o release fica `failed` com objetos
+  # órfãos e o próximo run tropeça neles.
+  cleanup_on_fail = true
+
   values = [yamlencode({
     controller = {
       ingressController = {

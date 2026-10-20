@@ -10,7 +10,10 @@ environment = "prod" # no TFC: prod no workspace de produção, staging no de ho
 # Precisa não colidir com a rede de casa/escritório se um dia houver VPN.
 vpc_cidr = "10.0.0.0/16"
 
-kubernetes_version = "1.32"
+# Em suporte padrão até 03/2027. Antes de trocar, confira as versões em suporte
+# padrão (fora dele o control plane custa ~6x):
+#   aws eks describe-cluster-versions --region us-east-1
+kubernetes_version = "1.35"
 
 # AWS Academy: t3.medium é a escolha do lab. Numa conta paga, o default
 # c7i-flex.large também serve (2 vCPU / 4 GiB, free-tier-eligible). Evite os
@@ -31,7 +34,7 @@ lab_mode = true
 # ID da conta (12 dígitos). Opcional: vazio resolve sozinho pelas
 # credenciais do run (data.aws_caller_identity) — nada de específico
 # por conta no código nem no workspace. Descomente para fixar:
-# aws_account_id = "997726080598"
+# aws_account_id = "123456789012"
 
 # Overrides manuais, só se LabRole/voclabs tiverem outro nome:
 # lab_role_arn        = "arn:aws:iam::<conta>:role/LabRole"

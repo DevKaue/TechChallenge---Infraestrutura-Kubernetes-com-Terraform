@@ -68,6 +68,11 @@ module "eks" {
       max_size       = var.node_group_size.max
       desired_size   = var.node_group_size.desired
 
+      # Explícito, e não o default da API da EKS: não existe AMI AL2 para o
+      # Kubernetes 1.33+, e trocar o tipo de AMI depois RECRIA o node group
+      # (AL2 → AL2023 não é atualização in-place).
+      ami_type = "AL2023_x86_64_STANDARD"
+
       # Nós em subnet privada, saindo pelo NAT. O ALB fica nas públicas.
       subnet_ids = module.vpc.private_subnets
 

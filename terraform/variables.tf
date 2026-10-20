@@ -51,16 +51,16 @@ variable "kubernetes_version" {
 }
 
 variable "node_instance_types" {
-  # c7i-flex.large e NÃO t3.medium: contas no plano AWS Free Tier bloqueiam o
-  # lançamento de tipos fora da faixa gratuita, com o erro
-  # "InvalidParameterCombination - not eligible for Free Tier" — que só aparece
-  # DEPOIS de criar o cluster, na hora de subir o node group.
-  # Mesmos 2 vCPU / 4 GiB do t3.medium, e disponível nas 3 AZs de us-east-1.
+  # t3.medium porque o default de lab_mode é true: o AWS Academy restringe os
+  # tipos de instância, e é o tipo que o lab aceita.
+  # Numa conta no plano AWS Free Tier, use c7i-flex.large: o Free Tier bloqueia
+  # tipos fora da faixa gratuita com "InvalidParameterCombination - not eligible
+  # for Free Tier", e o erro só aparece DEPOIS de criar o cluster, na hora de
+  # subir o node group. Mesmos 2 vCPU / 4 GiB.
   # Evite os t4g.*: são ARM (Graviton) e a imagem é buildada para amd64.
-  # Numa conta em plano pago, t3.medium volta a ser a escolha natural.
-  description = "Tipos de instância do managed node group. Precisa ser free-tier-eligible se a conta estiver no plano gratuito."
+  description = "Tipos de instância do managed node group. No AWS Academy, t3.medium; numa conta no plano gratuito, c7i-flex.large."
   type        = list(string)
-  default     = ["c7i-flex.large"]
+  default     = ["t3.medium"]
 }
 
 variable "node_group_size" {

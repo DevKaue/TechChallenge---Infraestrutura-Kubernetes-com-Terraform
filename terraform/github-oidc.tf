@@ -137,13 +137,19 @@ data "aws_iam_policy_document" "github_app_deploy" {
     resources = [module.eks.cluster_arn]
   }
 
-  # Lê o DATABASE_URL que o repo infra-db grava no Secrets Manager, para montar
-  # o .env.secret do overlay no deploy. O nome do segredo segue o padrão
-  # <project>-<ambiente>/rds (ex.: techchallenge-staging/rds).
+  # Lê as credenciais do Postgres que o repositório de banco publica no SSM
+  # (/techchallenge/<env>/db/{host,port,name,username,password}), para montar o
+  # DATABASE_URL do .env.secret do overlay no deploy. SSM e não Secrets Manager:
+  # é onde o repositório de banco grava (decisão registrada no secrets.tf dele).
+  # A senha é SecureString com a chave gerenciada alias/aws/ssm, que não exige
+  # kms:Decrypt explícito na policy.
   statement {
-    effect    = "Allow"
-    actions   = ["secretsmanager:GetSecretValue"]
-    resources = ["arn:aws:secretsmanager:${var.region}:${local.account_id}:secret:${local.name}/rds*"]
+    effect  = "Allow"
+    actions = ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath"]
+    resources = [
+      "arn:aws:ssm:${var.region}:${local.account_id}:parameter/${var.project}/${var.environment}/db",
+      "arn:aws:ssm:${var.region}:${local.account_id}:parameter/${var.project}/${var.environment}/db/*",
+    ]
   }
 
   # Lê o segredo JWT compartilhado (secrets.tf) para montar o Secret do app e as
@@ -185,9 +191,15 @@ resource "aws_eks_access_policy_association" "github_app_deploy" {
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 2. Deploy da LAMBDA (repo techchallenge-lambda)
-#    `sam deploy` = CloudFormation que cria função, role e VPC config. Sem API
-#    Gateway da AWS: quem expõe a Lambda é o Kong (kong.tf), via plugin
+#    Sem API Gateway da AWS: quem expõe a Lambda é o Kong (kong.tf), via plugin
 #    aws-lambda. A role é assumida pelo repo DONO da lambda.
+#
+#    DESATUALIZADO: a policy abaixo foi escrita para `sam deploy`
+#    (CloudFormation). O repositório da Lambda passou a publicar com Terraform e
+#    imagem no ECR, que precisa de ecr:*, logs:* e leitura de SSM/VPC que esta
+#    policy não dá. Só tem efeito fora do AWS Academy (lab_mode = false); no lab
+#    a Lambda usa as credenciais temporárias e nada daqui é criado. Revisar
+#    antes de usar numa conta normal.
 # ─────────────────────────────────────────────────────────────────────────────
 data "aws_iam_policy_document" "assume_lambda" {
   count = local.github_lambda_role_enabled ? 1 : 0

@@ -35,6 +35,9 @@ resource "helm_release" "alb_controller" {
   version    = "3.5.0"
   namespace  = "kube-system"
 
+  # Mesmo motivo do helm_release.kong: upgrade que falha não deixa órfãos.
+  cleanup_on_fail = true
+
   set {
     name  = "clusterName"
     value = module.eks.cluster_name
