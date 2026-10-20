@@ -6,8 +6,9 @@ on:
   push:
     branches: [main, develop]
 
+# O deploy (plan/apply) roda no HCP Terraform, não aqui. Este workflow é só o
+# gate de PR: formatação e validação estática, sem tocar o backend/cloud.
 permissions:
-  id-token: write
   contents: read
 
 env:
@@ -25,7 +26,7 @@ jobs:
 
       - uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: "~1.10.0"
+          terraform_version: "1.16.5"
 
       - name: terraform fmt
         run: terraform fmt -check -diff

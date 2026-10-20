@@ -1,8 +1,5 @@
 variable "region" {
-  # ATENÇÃO: o backend S3 (versions.tf) tem a região como literal, porque bloco
-  # `backend` não aceita variável. Trocar aqui NÃO troca a do backend — os dois
-  # precisam mudar juntos, senão o state fica numa região e a infra em outra.
-  description = "Região da AWS. Precisa bater com a região do backend em versions.tf."
+  description = "Região da AWS. Usada pelo provider aws e pelos módulos (VPC, EKS, ECR, SSM)."
   type        = string
   default     = "us-east-1"
 }
@@ -14,45 +11,60 @@ variable "project" {
 }
 
 variable "environment" {
-  description = "Ambiente lógico (prod, staging)."
+  description = "Ambiente lógico (prod, staging). Obrigatória: definir em cada workspace do HCP Terraform."
   type        = string
-  default     = "prod"
+
+  # Sem default de propósito: staging e prod dividem a mesma conta AWS, e um
+  # default "prod" faria um workspace sem a variável subir recursos com nome
+  # de produção (colisão ou sobrescrita).
+  validation {
+    condition     = contains(["prod", "staging"], var.environment)
+    error_message = "environment precisa ser \"prod\" ou \"staging\"."
+  }
 }
 
 variable "vpc_cidr" {
-  description = "CIDR da VPC. Vira o ipBlock da NetworkPolicy do overlay aws consumido pelo repositório da aplicação."
+  description = "CIDR da VPC. Vira o ipBlock da NetworkPolicy do overlay aws consumido pelo repositório da aplicação. Sugestão: 10.0.0.0/16 em prod e 10.1.0.0/16 em staging."
   type        = string
   default     = "10.0.0.0/16"
 
-  # Sem isto, um valor inválido só estoura lá dentro do cidrsubnet() do vpc.tf,
-  # com uma mensagem que não menciona esta variável. O /20 exige prefixo <= /20.
+  # Ternário (e não &&): o HCL não faz curto-circuito no &&. Com um valor sem
+  # "/" (ex.: "abc"), o split(...)[1] estouraria antes de exibir a error_message.
+  # O /20 exige prefixo <= /20.
   validation {
-    condition     = can(cidrhost(var.vpc_cidr, 0)) && tonumber(split("/", var.vpc_cidr)[1]) <= 20
+    condition     = can(cidrhost(var.vpc_cidr, 0)) ? tonumber(split("/", var.vpc_cidr)[1]) <= 20 : false
     error_message = "vpc_cidr precisa ser um CIDR válido com prefixo /20 ou menor (ex.: 10.0.0.0/16)."
   }
 }
 
 variable "kubernetes_version" {
-  description = "Versão do control plane do EKS."
+  description = "Versão do control plane do EKS. Obrigatória: use uma versão ainda em suporte padrão (aws eks describe-cluster-versions --region us-east-1). Versões fora do suporte padrão entram em suporte estendido, com custo de cerca de 6x no control plane."
   type        = string
-  default     = "1.32"
+
+  # Sem default de propósito: qualquer valor fixo aqui fica velho em poucos
+  # meses (o suporte padrão do EKS dura 14 meses por versão) e volta a gerar
+  # custo extra sem ninguém perceber.
+  validation {
+    condition     = can(regex("^1\\.[0-9]{2}$", var.kubernetes_version))
+    error_message = "kubernetes_version precisa estar no formato 1.NN (ex.: 1.34)."
+  }
 }
 
 variable "node_instance_types" {
-  # c7i-flex.large e NÃO t3.medium: contas no plano AWS Free Tier bloqueiam o
-  # lançamento de tipos fora da faixa gratuita, com o erro
-  # "InvalidParameterCombination - not eligible for Free Tier" — que só aparece
-  # DEPOIS de criar o cluster, na hora de subir o node group.
-  # Mesmos 2 vCPU / 4 GiB do t3.medium, e disponível nas 3 AZs de us-east-1.
+  # t3.medium porque o default de lab_mode é true: o AWS Academy restringe os
+  # tipos de instância, e é o tipo que o lab aceita.
+  # Numa conta no plano AWS Free Tier, use c7i-flex.large: o Free Tier bloqueia
+  # tipos fora da faixa gratuita com "InvalidParameterCombination - not eligible
+  # for Free Tier", e o erro só aparece DEPOIS de criar o cluster, na hora de
+  # subir o node group. Mesmos 2 vCPU / 4 GiB.
   # Evite os t4g.*: são ARM (Graviton) e a imagem é buildada para amd64.
-  # Numa conta em plano pago, t3.medium volta a ser a escolha natural.
-  description = "Tipos de instância do managed node group. Precisa ser free-tier-eligible se a conta estiver no plano gratuito."
+  description = "Tipos de instância do managed node group. No AWS Academy, t3.medium; numa conta no plano gratuito, c7i-flex.large."
   type        = list(string)
-  default     = ["c7i-flex.large"]
+  default     = ["t3.medium"]
 }
 
 variable "node_group_size" {
-  description = "Tamanho do managed node group. min >= 2 para o HPA ter onde espalhar."
+  description = "Tamanho do managed node group. min >= 2 para o HPA ter onde espalhar. Sugestão: staging { min = 2, desired = 2, max = 2 }; prod { min = 2, desired = 2, max = 4 }."
   type = object({
     min     = number
     max     = number
@@ -76,50 +88,37 @@ variable "node_group_size" {
   }
 }
 
-variable "db_state_bucket" {
-  description = "Bucket S3 que guarda o state do repositório de banco de dados gerenciado."
-  type        = string
-  default     = "techchallenge-fiap-v1"
-}
-
-variable "db_state_key" {
-  description = "Key do state do repositório de banco de dados. Um key por ambiente."
-  type        = string
-  default     = "db/prod/terraform.tfstate"
-}
-
-variable "db_state_region" {
-  description = "Região do bucket de state do repositório de banco de dados."
-  type        = string
-  default     = "us-east-1"
-}
-
-variable "github_repository" {
-  description = "owner/repo autorizado a assumir a role de deploy via OIDC. Vazio desliga o recurso."
-  type        = string
-  default     = "DevKaue/TechChallenge---Infraestrutura-Kubernetes-com-Terraform"
-}
-
 variable "github_app_repository" {
-  description = "owner/repo da aplicação autorizado a assumir a role de deploy via OIDC. Vazio desliga o recurso."
+  description = "owner/repo da aplicação autorizado a assumir a role de deploy via OIDC. Vazio desliga o recurso. Só tem efeito com lab_mode = false."
   type        = string
-  default     = "DevKaue/tech-challenge-app-"
+  default     = "DevKaue/tech-challenge-app"
 }
 
 variable "github_lambda_repository" {
-  description = "owner/repo da Lambda de autenticação autorizado a assumir a role de deploy via OIDC. Vazio desliga o recurso."
+  description = "owner/repo da Lambda de autenticação autorizado a assumir a role de deploy via OIDC. Vazio desliga o recurso. Só tem efeito com lab_mode = false. A grafia precisa bater exatamente com o repositório (a comparação na trust policy diferencia maiúsculas de minúsculas)."
   type        = string
   default     = "DevKaue/TechChallange---Function-Serverless"
 }
 
-variable "github_deploy_policy_arns" {
-  description = "Policies anexadas à role de deploy do CI. O apply do Terraform cria VPC, IAM, EKS e escreve no state S3, o que exige permissão ampla. Restrinja numa conta real."
-  type        = list(string)
-  default     = ["arn:aws:iam::aws:policy/AdministratorAccess"]
+variable "lab_mode" {
+  description = "Modo AWS Academy (Learner Lab): a conta não permite criar roles de IAM nem provider OIDC. Ligado, cluster e nós usam a LabRole (veja lab_role_arn), sem IRSA e sem roles OIDC do GitHub, e ALB Controller e Kong usam a credencial do nó. Desligado = conta normal, com IRSA. É esta variável que liga/desliga o modo."
+  type        = bool
+  default     = true
+}
+
+variable "aws_account_id" {
+  description = "ID da conta AWS (12 dígitos) usado para montar os ARNs da LabRole e da voclabs. Vazio = resolvido automaticamente pelas credenciais que rodam o plan/apply (data.aws_caller_identity) — o recomendado: nada específico por conta no código nem no workspace."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.aws_account_id == "" || can(regex("^[0-9]{12}$", var.aws_account_id))
+    error_message = "aws_account_id precisa ser vazio ou um ID de conta AWS de 12 dígitos."
+  }
 }
 
 variable "lab_role_arn" {
-  description = "ARN da LabRole do AWS Academy (ex.: arn:aws:iam::<conta>:role/LabRole). Preenchido, nenhum recurso de IAM é criado: cluster e nós usam a LabRole, sem IRSA nem roles OIDC do GitHub, e ALB Controller e Kong usam a credencial do nó. Vazio = IRSA."
+  description = "ARN completa da LabRole do AWS Academy. Vazio = montada automaticamente como arn:aws:iam::<conta>:role/LabRole, com a conta de aws_account_id (ou a das credenciais do run). Serve só para sobrescrever o nome/ARN da role (ex.: LabRole com outro nome); preencher ou não esta variável NÃO liga nem desliga o modo lab — isso é controlado por lab_mode."
   type        = string
   default     = ""
 
@@ -139,4 +138,15 @@ variable "cluster_readonly_arns" {
   description = "ARNs de IAM que recebem acesso somente-leitura ao namespace techchallenge (via grupo RBAC techchallenge:readonly)."
   type        = list(string)
   default     = []
+}
+
+variable "cluster_creator_arn" {
+  description = "ARN da role que criou/cria o cluster EKS. Nulo = no modo lab, montada automaticamente como arn:aws:iam::<conta>:role/voclabs; fora do lab, o módulo mantém o comportamento original (resolução via aws_iam_session_context)."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.cluster_creator_arn == null || can(regex("^arn:aws:iam::[0-9]{12}:role/.+$", var.cluster_creator_arn))
+    error_message = "cluster_creator_arn precisa ser nulo ou um ARN de role IAM (arn:aws:iam::<conta>:role/<nome>)."
+  }
 }

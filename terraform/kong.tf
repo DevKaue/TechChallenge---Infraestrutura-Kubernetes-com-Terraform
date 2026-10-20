@@ -35,13 +35,12 @@ data "aws_iam_policy_document" "kong_invoke_auth_lambda" {
   count = local.kong_use_irsa ? 1 : 0
 
   statement {
-    effect    = "Allow"
-    actions   = ["lambda:InvokeFunction"]
+    effect  = "Allow"
+    actions = ["lambda:InvokeFunction"]
+    # data.aws_caller_identity.current vem de main.tf.
     resources = ["arn:aws:lambda:${var.region}:${data.aws_caller_identity.current.account_id}:function:${local.auth_lambda_name}"]
   }
 }
-
-data "aws_caller_identity" "current" {}
 
 resource "aws_iam_policy" "kong_invoke_auth_lambda" {
   count = local.kong_use_irsa ? 1 : 0
@@ -86,6 +85,11 @@ resource "helm_release" "kong" {
   # O helm espera o Service LoadBalancer receber endereço; o NLB pode passar
   # dos 300s padrão para ficar pronto.
   timeout = 600
+
+  # Num upgrade que falha (timeout, credencial do lab expirada no meio), apaga
+  # o que a revisão nova criou. Sem isto o release fica `failed` com objetos
+  # órfãos e o próximo run tropeça neles.
+  cleanup_on_fail = true
 
   values = [yamlencode({
     controller = {

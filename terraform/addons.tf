@@ -6,9 +6,31 @@
 #     o requisito de escalabilidade simplesmente não funciona.
 #   - amazon-cloudwatch-observability: Container Insights (métricas + logs de
 #     pod) sem nenhum YAML nosso.
+
+# Versão de cada addon amarrada à versão do Kubernetes. Sem `addon_version`, a
+# EKS instala a versão padrão do dia da criação e NÃO a atualiza quando o
+# control plane sobe de versão: o vpc-cni/kube-proxy antigos ficam rodando num
+# cluster novo até alguém perceber. most_recent = false = a versão padrão que a
+# AWS testou para aquele Kubernetes, que muda menos entre runs que a mais nova.
+data "aws_eks_addon_version" "this" {
+  for_each = toset([
+    "vpc-cni",
+    "coredns",
+    "kube-proxy",
+    "eks-pod-identity-agent",
+    "metrics-server",
+    "amazon-cloudwatch-observability",
+  ])
+
+  addon_name         = each.key
+  kubernetes_version = var.kubernetes_version
+  most_recent        = false
+}
+
 resource "aws_eks_addon" "vpc_cni" {
   cluster_name                = module.eks.cluster_name
   addon_name                  = "vpc-cni"
+  addon_version               = data.aws_eks_addon_version.this["vpc-cni"].version
   resolve_conflicts_on_create = "OVERWRITE"
   resolve_conflicts_on_update = "OVERWRITE"
 
@@ -22,6 +44,7 @@ resource "aws_eks_addon" "vpc_cni" {
 resource "aws_eks_addon" "coredns" {
   cluster_name                = module.eks.cluster_name
   addon_name                  = "coredns"
+  addon_version               = data.aws_eks_addon_version.this["coredns"].version
   resolve_conflicts_on_create = "OVERWRITE"
   resolve_conflicts_on_update = "OVERWRITE"
 
@@ -37,6 +60,7 @@ resource "aws_eks_addon" "coredns" {
 resource "aws_eks_addon" "kube_proxy" {
   cluster_name                = module.eks.cluster_name
   addon_name                  = "kube-proxy"
+  addon_version               = data.aws_eks_addon_version.this["kube-proxy"].version
   resolve_conflicts_on_create = "OVERWRITE"
   resolve_conflicts_on_update = "OVERWRITE"
 
@@ -46,6 +70,7 @@ resource "aws_eks_addon" "kube_proxy" {
 resource "aws_eks_addon" "pod_identity" {
   cluster_name                = module.eks.cluster_name
   addon_name                  = "eks-pod-identity-agent"
+  addon_version               = data.aws_eks_addon_version.this["eks-pod-identity-agent"].version
   resolve_conflicts_on_create = "OVERWRITE"
   resolve_conflicts_on_update = "OVERWRITE"
 
@@ -55,6 +80,7 @@ resource "aws_eks_addon" "pod_identity" {
 resource "aws_eks_addon" "metrics_server" {
   cluster_name                = module.eks.cluster_name
   addon_name                  = "metrics-server"
+  addon_version               = data.aws_eks_addon_version.this["metrics-server"].version
   resolve_conflicts_on_create = "OVERWRITE"
   resolve_conflicts_on_update = "OVERWRITE"
 
@@ -66,6 +92,7 @@ resource "aws_eks_addon" "metrics_server" {
 resource "aws_eks_addon" "cloudwatch_observability" {
   cluster_name                = module.eks.cluster_name
   addon_name                  = "amazon-cloudwatch-observability"
+  addon_version               = data.aws_eks_addon_version.this["amazon-cloudwatch-observability"].version
   resolve_conflicts_on_create = "OVERWRITE"
   resolve_conflicts_on_update = "OVERWRITE"
 
