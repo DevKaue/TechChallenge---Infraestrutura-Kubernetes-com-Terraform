@@ -4,11 +4,7 @@ provider "aws" {
   # Sem tag Environment: o bucket é um só para staging e prod, e para os 4
   # repositórios. Os ambientes se separam pela key do state, não pelo bucket.
   default_tags {
-    tags = {
-      Project   = var.project
-      ManagedBy = "terraform"
-      Component = "tfstate"
-    }
+    tags = local.tags
   }
 }
 
@@ -20,24 +16,62 @@ locals {
   # Nome de bucket é global na AWS. O ID da conta no sufixo evita colidir com o
   # bucket de outra conta (o techchallenge-fiap-v1 antigo é exatamente isso).
   bucket_name = "${var.project}-tfstate-${data.aws_caller_identity.current.account_id}"
+  bucket_arn  = "arn:aws:s3:::${local.bucket_name}"
+
+  tags = {
+    Project   = var.project
+    ManagedBy = "terraform"
+    Component = "tfstate"
+  }
 }
 
 # Guarda o state de TODOS os repositórios (k8s/, db/, lambda/ e bootstrap/).
-resource "aws_s3_bucket" "state" {
-  bucket = local.bucket_name
+#
+# Por que AWS CLI e não `aws_s3_bucket`: toda leitura do recurso aws_s3_bucket
+# chama s3:GetBucketObjectLockConfiguration, que a SCP da organização do AWS
+# Academy nega explicitamente ("explicit deny in a service control policy").
+# O apply cria o bucket e falha logo em seguida; o recurso fica tainted e nenhum
+# plan seguinte consegue ler o bucket. Testado com o provider 5.100 e o 6.x: o
+# mesmo erro. As APIs de CONFIGURAÇÃO do bucket (versioning, encryption, policy,
+# lifecycle...) são liberadas, então tudo abaixo continua no provider.
+#
+# Efeito colateral bom: o bucket em si não fica no state, então nenhum
+# `terraform destroy` consegue apagá-lo junto com o state dos 4 repositórios.
+# Para remover de verdade: esvaziar e `aws s3api delete-bucket`, de propósito.
+resource "terraform_data" "state_bucket" {
+  input = local.bucket_name
 
-  # Um `destroy` aqui apagaria o state dos 4 repositórios de uma vez, e a infra
-  # continuaria na AWS sem nada que a gerencie. Para remover de propósito, tire
-  # o prevent_destroy num PR, onde o motivo fica registrado.
-  lifecycle {
-    prevent_destroy = true
+  # Idempotente: só cria se o bucket ainda não existir (re-run e conta já
+  # bootstrapada não falham). A região us-east-1 não aceita LocationConstraint.
+  provisioner "local-exec" {
+    interpreter = ["/bin/sh", "-c"]
+    command     = <<-EOT
+      set -eu
+      if aws s3api head-bucket --bucket "$BUCKET" 2>/dev/null; then
+        echo "bucket $BUCKET já existe"
+      elif [ "$REGION" = "us-east-1" ]; then
+        aws s3api create-bucket --bucket "$BUCKET" --region "$REGION"
+      else
+        aws s3api create-bucket --bucket "$BUCKET" --region "$REGION" \
+          --create-bucket-configuration "LocationConstraint=$REGION"
+      fi
+      aws s3api put-bucket-tagging --bucket "$BUCKET" --tagging "$TAGS"
+    EOT
+
+    environment = {
+      BUCKET = local.bucket_name
+      REGION = var.region
+      TAGS = jsonencode({
+        TagSet = [for k, v in local.tags : { Key = k, Value = v }]
+      })
+    }
   }
 }
 
 # Versionamento: cada apply grava uma versão nova do state. Um state corrompido
 # ou sobrescrito volta pela versão anterior, sem recriar nada na AWS.
 resource "aws_s3_bucket_versioning" "state" {
-  bucket = aws_s3_bucket.state.id
+  bucket = terraform_data.state_bucket.output
 
   versioning_configuration {
     status = "Enabled"
@@ -48,7 +82,7 @@ resource "aws_s3_bucket_versioning" "state" {
 # bloqueio de acesso público e pela policy; a CMK custaria ~US$1/mês sem mudar
 # quem consegue ler (no lab, quem tem a credencial lê com ou sem CMK).
 resource "aws_s3_bucket_server_side_encryption_configuration" "state" {
-  bucket = aws_s3_bucket.state.id
+  bucket = terraform_data.state_bucket.output
 
   rule {
     apply_server_side_encryption_by_default {
@@ -60,7 +94,7 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "state" {
 # O state guarda o segredo JWT e a senha do banco em texto claro. Nada aqui pode
 # ficar público, nem por engano numa ACL ou policy futura.
 resource "aws_s3_bucket_public_access_block" "state" {
-  bucket = aws_s3_bucket.state.id
+  bucket = terraform_data.state_bucket.output
 
   block_public_acls       = true
   block_public_policy     = true
@@ -70,7 +104,7 @@ resource "aws_s3_bucket_public_access_block" "state" {
 
 # ACLs desligadas: o acesso é decidido só por IAM e pela policy abaixo.
 resource "aws_s3_bucket_ownership_controls" "state" {
-  bucket = aws_s3_bucket.state.id
+  bucket = terraform_data.state_bucket.output
 
   rule {
     object_ownership = "BucketOwnerEnforced"
@@ -80,7 +114,7 @@ resource "aws_s3_bucket_ownership_controls" "state" {
 # Sem expiração, cada apply dos 4 repositórios deixaria uma versão de state para
 # sempre. As versões antigas ficam pela janela configurada e depois expiram.
 resource "aws_s3_bucket_lifecycle_configuration" "state" {
-  bucket = aws_s3_bucket.state.id
+  bucket = terraform_data.state_bucket.output
 
   rule {
     id     = "expira-versoes-antigas-de-state"
@@ -114,8 +148,8 @@ data "aws_iam_policy_document" "state" {
     }
 
     resources = [
-      aws_s3_bucket.state.arn,
-      "${aws_s3_bucket.state.arn}/*",
+      local.bucket_arn,
+      "${local.bucket_arn}/*",
     ]
 
     condition {
@@ -127,7 +161,7 @@ data "aws_iam_policy_document" "state" {
 }
 
 resource "aws_s3_bucket_policy" "state" {
-  bucket = aws_s3_bucket.state.id
+  bucket = terraform_data.state_bucket.output
   policy = data.aws_iam_policy_document.state.json
 
   # Com block_public_policy ligado antes, a AWS valida esta policy contra o

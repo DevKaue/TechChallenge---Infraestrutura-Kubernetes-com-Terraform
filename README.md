@@ -88,18 +88,23 @@ num bucket S3 só, com uma key por repositório e ambiente (`k8s/prod/...`,
   nenhum ID de conta fica no código, e cada conta do AWS Academy ganha o seu;
 - versionamento (um state corrompido volta pela versão anterior), SSE-S3,
   bloqueio de acesso público, ACLs desligadas, acesso só por TLS e expiração
-  das versões antigas;
-- `prevent_destroy`: um `destroy` acidental apagaria o state de todos os
-  repositórios.
+  das versões antigas, todos gerenciados pelo provider AWS;
+- o bucket em si é criado pelo AWS CLI (`terraform_data`, idempotente), e não
+  por `aws_s3_bucket`: toda leitura desse recurso chama
+  `s3:GetBucketObjectLockConfiguration`, negado por uma SCP da organização do
+  AWS Academy (testado com os providers 5.x e 6.x). Efeito colateral bom: o
+  bucket não fica no state, então nenhum `terraform destroy` o apaga junto com
+  o state de todos os repositórios.
 
 Roda **uma vez por conta**, na máquina de quem tem as credenciais do lab, e de
 novo só se o lab do Academy for resetado (o reset apaga o bucket). Não roda no
 GitHub Actions: o primeiro apply sempre tem state local, e um segundo run
 tentaria recriar o bucket.
 
-Pré-requisitos: Terraform `1.16.x`, credenciais do lab (`AWS_PROFILE` ou
-`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_SESSION_TOKEN`) e o `gh`
-autenticado.
+Pré-requisitos: Terraform `1.16.x`, AWS CLI v2, credenciais do lab
+(`AWS_PROFILE` ou `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_SESSION_TOKEN`)
+e o `gh` autenticado com **admin** nos repositórios (criar variável de Actions
+exige admin).
 
 ```bash
 cd bootstrap
@@ -114,7 +119,8 @@ BUCKET=$(terraform output -raw bucket_name)
 # 2. Move o state do bootstrap para dentro do próprio bucket.
 rm local_override.tf
 terraform init -migrate-state -force-copy -backend-config="bucket=$BUCKET"
-rm -f terraform.tfstate terraform.tfstate.backup   # cópia local, já migrada
+terraform plan -detailed-exitcode   # 0 = "No changes" lendo o state remoto
+rm -f terraform.tfstate terraform.tfstate*.backup  # cópias locais, já migradas
 
 # 3. Variável que o `terraform init` dos repositórios usa como bucket.
 for repo in thiagoalmeida88/TechChallenge---Infraestrutura-Kubernetes-com-Terraform \
