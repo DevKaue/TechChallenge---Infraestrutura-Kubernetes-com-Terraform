@@ -96,8 +96,23 @@ Passos, por workspace:
    não fica na raiz do repositório.
 3. O runner padrão do TFC **não tem o AWS CLI**, e o provider Helm autentica com
    `aws eks get-token` (`terraform/providers.tf`). Configure **Execution Mode →
-   Agent** e registre um **agent self-hosted** com o AWS CLI instalado (a imagem
-   oficial `hashicorp/tfc-agent` não traz o AWS CLI: use uma imagem derivada).
+   Agent** e rode um **agent self-hosted** com o AWS CLI. A imagem oficial
+   `hashicorp/tfc-agent` não traz o AWS CLI; `tfc-agent/Dockerfile` estende a
+   oficial com ele. Com o token do agent pool (*Organization settings →
+   Agents*):
+
+   ```bash
+   docker build -t techchallenge-tfc-agent:1.33.1 tfc-agent
+   read -s TFC_AGENT_TOKEN && export TFC_AGENT_TOKEN   # cola o token, não aparece na tela
+   docker run -d --name tfc-agent --restart unless-stopped \
+     -e TFC_AGENT_TOKEN -e TFC_AGENT_NAME="$(hostname -s)" \
+     techchallenge-tfc-agent:1.33.1
+   docker logs -f tfc-agent   # espera "Agent registered successfully"
+   ```
+
+   O agent só precisa estar de pé durante plan e apply. O `.terraform.lock.hcl`
+   tem hashes para `linux_amd64` e `linux_arm64`, então o agent roda nativo
+   tanto em x86 quanto em Mac com Apple Silicon.
 4. Credenciais: um **Variable Set** compartilhado com os workspaces do banco,
    com as variáveis **Env (sensitive)** `AWS_ACCESS_KEY_ID`,
    `AWS_SECRET_ACCESS_KEY` e `AWS_SESSION_TOKEN`. São as credenciais temporárias
