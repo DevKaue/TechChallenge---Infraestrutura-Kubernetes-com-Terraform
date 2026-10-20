@@ -3,7 +3,7 @@ data "aws_availability_zones" "available" {
 }
 
 # A conta AWS NÃO é hardcoded: resolve das credenciais que rodam o
-# plan/apply — no HCP Terraform, são as env vars do workspace.
+# plan/apply — no deploy.yml, os secrets AWS_LAB_* do GitHub.
 # sts:GetCallerIdentity é permitido por qualquer credencial válida,
 # inclusive a sessão temporária do Academy.
 data "aws_caller_identity" "current" {}
@@ -22,7 +22,7 @@ locals {
   }
 
   # ID da conta: variável preenchida > credenciais do run. Único dado
-  # por-conta do código, e nem precisa virar variável no workspace.
+  # por-conta do código, e nem precisa virar variável no pipeline.
   account_id = var.aws_account_id != "" ? var.aws_account_id : data.aws_caller_identity.current.account_id
 
   # AWS Academy (Learner Lab): sem iam:CreateRole, iam:CreatePolicy nem

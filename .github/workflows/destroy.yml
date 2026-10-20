@@ -1,0 +1,97 @@
+name: destroy
+
+# Derruba a infra de um ambiente ao fim da janela de avaliação, para não queimar
+# o crédito do lab (EKS, NAT e NLB cobram por hora).
+#
+# A ordem entre repositórios é a inversa da criação: App → Lambda → Banco →
+# esta infra. O banco referencia o SG dos nós, e a Lambda vive nas subnets
+# desta VPC: com eles de pé, a AWS recusa apagar a rede (DependencyViolation).
+#
+# O bucket de state (bootstrap/) não é tocado: ele guarda o state de todos os
+# repositórios.
+on:
+  workflow_dispatch:
+    inputs:
+      ambiente:
+        description: Ambiente a derrubar
+        type: choice
+        options: [staging, prod]
+        required: true
+      confirmar:
+        description: Digite o nome do ambiente de novo para confirmar
+        required: true
+
+# O mesmo grupo do deploy do ambiente: destroy e apply nunca rodam juntos.
+concurrency:
+  group: deploy-${{ inputs.ambiente }}
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  AMBIENTE: ${{ inputs.ambiente }}
+  TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+
+jobs:
+  destroy:
+    name: Destroy
+    if: inputs.confirmar == inputs.ambiente
+    runs-on: ubuntu-latest
+    # Mesmo gate do deploy: derrubar produção também passa pelos revisores.
+    environment: ${{ inputs.ambiente == 'prod' && 'production' || 'staging' }}
+    defaults:
+      run:
+        working-directory: terraform
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Credenciais AWS (OIDC ou lab)
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE }}
+          aws-access-key-id: ${{ secrets.AWS_LAB_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_LAB_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_LAB_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+        with:
+          terraform_version: '1.16.5'
+          terraform_wrapper: false
+
+      - name: Terraform init
+        run: |
+          terraform init -input=false \
+            -backend-config="bucket=$TF_STATE_BUCKET" \
+            -backend-config="key=k8s/$AMBIENTE/terraform.tfstate"
+
+      # Os ALBs que o LB Controller cria a partir dos Ingress do app ficam FORA
+      # do state: se sobrarem, o destroy trava na VPC com ENIs e SGs órfãos.
+      # Apagar os Ingress com o controller ainda de pé faz ele remover os ALBs.
+      - name: Remover Ingress do app (ALBs fora do state)
+        run: |
+          cluster="techchallenge-$AMBIENTE"
+          if aws eks describe-cluster --name "$cluster" --region "$AWS_REGION" >/dev/null 2>&1; then
+            aws eks update-kubeconfig --name "$cluster" --region "$AWS_REGION" >/dev/null
+            kubectl delete ingress --all --all-namespaces --wait=true --timeout=5m || true
+          else
+            echo "Cluster $cluster não existe; nada a remover."
+          fi
+
+      # O run registra o que foi derrubado antes de derrubar.
+      - name: Plan do destroy no resumo do run
+        run: |
+          terraform plan -destroy -input=false -no-color -var-file="envs/$AMBIENTE.tfvars" -out=tfdestroy
+          {
+            echo "## Destroy de \`$AMBIENTE\`"
+            echo '```'
+            terraform show -no-color tfdestroy
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Terraform destroy
+        run: terraform apply -input=false tfdestroy

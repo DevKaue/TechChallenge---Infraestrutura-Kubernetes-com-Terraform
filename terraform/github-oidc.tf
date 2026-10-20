@@ -5,25 +5,26 @@
 # UM ROLE POR REPOSITÓRIO QUE AINDA DEPLOYA POR ACTIONS (aplicação e Lambda), e
 # UM CONJUNTO POR AMBIENTE (o nome da role usa local.name). Cada role só pode ser
 # assumida por jobs do GitHub Environment correspondente:
-#   - workspace staging → repo:<owner>/<repo>:environment:staging
-#   - workspace prod    → repo:<owner>/<repo>:environment:production
+#   - apply de staging → repo:<owner>/<repo>:environment:staging
+#   - apply de prod    → repo:<owner>/<repo>:environment:production
 # Sem essa restrição, QUALQUER branch (ou PR) do repositório assumiria a role, e
 # um workflow de staging poderia assumir a role de produção. Por isso os jobs de
 # deploy PRECISAM declarar `environment: staging` ou `environment: production`.
 #
-# O Terraform DESTE repositório NÃO tem mais role: o plan/apply roda no HCP
-# Terraform (ver versions.tf), não em GitHub Actions.
+# O Terraform DESTE repositório não tem role aqui: um pipeline não pode criar a
+# role que ele mesmo precisa para rodar. Fora do lab, essa role (AWS_DEPLOY_ROLE
+# no deploy.yml) é criada uma vez, à parte, como o bucket do bootstrap/.
 #
 # O provider OIDC é UM POR CONTA AWS, e staging e prod compartilham a conta. Por
-# isso só o workspace de prod o cria; o de staging apenas o consulta
+# isso só o apply de prod o cria; o de staging apenas o consulta
 # (data source). Consequência: aplique o prod ANTES do staging na primeira vez
 # (ou o staging falha por não encontrar o provider). O infra-db também NÃO
 # recria o provider: usa `data "aws_iam_openid_connect_provider"`.
 #
 # AWS Academy (local.lab_mode): nada deste arquivo é criado — a conta não
 # permite provider OIDC nem roles. Os pipelines usam as credenciais temporárias
-# do lab (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY e AWS_SESSION_TOKEN): no
-# workspace do Terraform Cloud e nos secrets do GitHub do repositório do app.
+# do lab (access key, secret key e session token) nos secrets do GitHub de
+# cada repositório (AWS_LAB_* aqui, no banco e na Lambda).
 locals {
   github_app_role_enabled    = !local.lab_mode && var.github_app_repository != ""
   github_lambda_role_enabled = !local.lab_mode && var.github_lambda_repository != ""
@@ -34,7 +35,7 @@ locals {
   oidc_create = local.oidc_enabled && var.environment == "prod"
   oidc_lookup = local.oidc_enabled && var.environment != "prod"
 
-  # Nome do GitHub Environment que pode assumir as roles deste workspace.
+  # Nome do GitHub Environment que pode assumir as roles deste ambiente.
   github_environment = var.environment == "prod" ? "production" : var.environment
 
   # ARN do provider, venha de onde vier. one() evita erro de índice quando um dos

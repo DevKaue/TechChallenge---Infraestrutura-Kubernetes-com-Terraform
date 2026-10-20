@@ -14,6 +14,8 @@ tfdestroy*
 *.tfplan
 *.tfvars
 !example.tfvars
+# Valores por ambiente, sem segredo: versionados para aparecer no diff do PR.
+!envs/*.tfvars
 .terraform/
 # .terraform.lock.hcl NÃO é ignorado de propósito: é o que garante
 # que o próximo `init` resolva exatamente as mesmas versões de provider.

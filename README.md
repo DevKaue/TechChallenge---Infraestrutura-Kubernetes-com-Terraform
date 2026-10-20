@@ -3,8 +3,8 @@
 **Repositório 2 do projeto.** Infrastructure as Code (Terraform) da camada
 Kubernetes na AWS: **VPC, ECR, EKS, addons, ALB Controller, Kong (API Gateway) e
 IAM/OIDC**. Todo o ciclo de vida (criar, atualizar e destruir) é versionado aqui
-e executado pelo **HCP Terraform (Terraform Cloud)**, com um workspace por
-ambiente.
+e executado pelo **GitHub Actions**, com o state no S3 e um ambiente por branch
+(`develop` → staging, `main` → produção).
 
 ## Escopo
 
@@ -34,16 +34,18 @@ contém o código da aplicação, os manifestos Kustomize, nem o banco de dados:
   `auth_lambda_name`.
 - O **namespace** e o **Secret** da aplicação são criados pelo overlay Kustomize
   do repositório 4 (dono único), não por este repositório.
-- A **Lambda** (repo 1) e a **aplicação** (repo 4) deployam por **GitHub
-  Actions**. Este repositório e o de banco (repo 3) rodam no **HCP Terraform**.
+- Os 4 repositórios deployam por **GitHub Actions**. Os 3 com Terraform (este,
+  banco e Lambda) guardam o state no mesmo bucket S3, criado pelo `bootstrap/`
+  daqui, com uma key por repositório e ambiente.
 
 ### Ordem de deploy
 
 ```
-1. Infra Kubernetes (este, TFC)  → VPC, EKS, Kong, JWT e SG dos nós no SSM
-2. Infra Banco (TFC)             → descobre a VPC, libera o SG dos nós, publica /db/*
-3. Lambda (GitHub Actions)       → descobre a VPC, anexa o SG de cliente do banco
-4. Aplicação (GitHub Actions)    → build, push no ECR e apply no cluster
+0. Bootstrap (este, uma vez)     → bucket S3 do state dos repositórios
+1. Infra Kubernetes (este)       → VPC, EKS, Kong, JWT e SG dos nós no SSM
+2. Infra Banco                   → descobre a VPC, libera o SG dos nós, publica /db/*
+3. Lambda                        → descobre a VPC, anexa o SG de cliente do banco
+4. Aplicação                     → build, push no ECR e apply no cluster
 ```
 
 Uma VPC e um cluster **por ambiente** (`techchallenge-prod`,
@@ -54,7 +56,8 @@ staging e `main` de produção.
 
 ```
 terraform/            toda a infraestrutura como código
-├── versions.tf       required_version, providers e bloco cloud (HCP Terraform)
+├── versions.tf       required_version, providers e backend S3 (parcial)
+├── envs/             prod.tfvars e staging.tfvars, um por ambiente
 ├── providers.tf      aws / helm
 ├── modules/eks/      terraform-aws-modules/eks v20.37.2 vendored
 │                     (fork local: input `cluster_creator_arn` no lugar
@@ -74,7 +77,9 @@ terraform/            toda a infraestrutura como código
 └── outputs.tf        valores para configurar os repositórios 1 e 4
 bootstrap/            bucket S3 do state dos repositórios Terraform (aplicado
                       uma vez por conta, ver "Bootstrap do bucket de state")
-.github/workflows/    ci.yml (fmt + validate em PR, terraform/ e bootstrap/)
+.github/workflows/    ci.yml (fmt + validate em PR, terraform/ e bootstrap/),
+                      deploy.yml (plan + apply) e destroy.yml (sob demanda)
+.github/scripts/      conferir-plan.sh (guarda de destruição + resumo do plan)
 ```
 
 ## Bootstrap do bucket de state
@@ -133,73 +138,62 @@ done
 Mudanças posteriores no bootstrap usam o state remoto:
 `terraform init -backend-config="bucket=$BUCKET"` e depois `plan`/`apply`.
 
-## HCP Terraform (CI/CD)
+## CI/CD (GitHub Actions)
 
-O `plan`/`apply` roda no **HCP Terraform**, não mais em GitHub Actions. Há um
-**workspace por ambiente**, casados pela tag `techchallenge-infra` do bloco
-`cloud` (`terraform/versions.tf`):
+| Workflow | Dispara em | Faz |
+|---|---|---|
+| `ci.yml` | PR e push em `develop`/`main` | `fmt -check`, `init -backend=false` e `validate` de `terraform/` e `bootstrap/`, sem credencial |
+| `deploy.yml` | push em `main` (prod) e em `develop` (staging, só com `STAGING_ENABLED=true`) | job `plan` → job `apply` no environment do ambiente |
+| `destroy.yml` | manual (`workflow_dispatch`), escolhendo o ambiente e digitando o nome de novo | remove os Ingress do app, publica o `plan -destroy` e derruba |
 
-| Workspace | Branch (VCS) | `environment` | Observação |
-|---|---|---|---|
-| `techchallenge-infra-prod` | `main` | `prod` | produção |
-| `techchallenge-infra-staging` | `develop` | `staging` | sobe só quando for usar: dobra o custo (EKS, NAT, NLB) |
+O `deploy.yml` tem dois jobs, para quem aprova produção ver o plan **antes** de
+aprovar:
 
-Organização: `tech-challenge-infra` (bloco `cloud` em `terraform/versions.tf`).
+1. **`plan`** (sem environment): `init` com o bucket e a key `k8s/<env>/...`,
+   `plan` com `envs/<env>.tfvars`, a guarda do `.github/scripts/conferir-plan.sh`
+   e o plano no resumo do run. A guarda para o pipeline se o plan destruir ou
+   recriar o cluster, a VPC, o ECR ou o segredo JWT: derrubar é trabalho do
+   `destroy.yml`.
+2. **`apply`** (environment `production` ou `staging`): o gate de revisores
+   segura o job. Depois de aprovado, ele **planeja de novo** e só aplica se o
+   plano for o mesmo que foi aprovado (comparando endereço e ação de cada
+   recurso). O `tfplan` não vira artifact: o repositório é público e o plano
+   carrega o segredo JWT em claro.
 
-Passos, por workspace:
+O mesmo valor (`prod`/`staging`, derivado da branch) escolhe o `envs/<env>.tfvars`
+e a key do state. É o que impede o plan de staging de rodar contra o state de
+prod.
 
-1. Crie o workspace com a tag `techchallenge-infra` e fixe a **Terraform
-   version** em `1.16.5` (a mesma do `ci.yml`).
-2. **Settings → General → Terraform Working Directory**: `terraform`. O código
-   não fica na raiz do repositório.
-3. O runner padrão do TFC **não tem o AWS CLI**, e o provider Helm autentica com
-   `aws eks get-token` (`terraform/providers.tf`). Configure **Execution Mode →
-   Agent** e rode um **agent self-hosted** com o AWS CLI. A imagem oficial
-   `hashicorp/tfc-agent` não traz o AWS CLI; `tfc-agent/Dockerfile` estende a
-   oficial com ele. Com o token do agent pool (*Organization settings →
-   Agents*):
+### Configuração do repositório (uma vez)
 
-   ```bash
-   docker build -t techchallenge-tfc-agent:1.33.1 tfc-agent
-   read -s TFC_AGENT_TOKEN && export TFC_AGENT_TOKEN   # cola o token, não aparece na tela
-   docker run -d --name tfc-agent --restart unless-stopped \
-     -e TFC_AGENT_TOKEN -e TFC_AGENT_NAME="$(hostname -s)" \
-     techchallenge-tfc-agent:1.33.1
-   docker logs -f tfc-agent   # espera "Agent registered successfully"
-   ```
+- **Variável** `TF_STATE_BUCKET`: o `bucket_name` do bootstrap.
+- **Secrets do repositório** `AWS_LAB_ACCESS_KEY_ID`,
+  `AWS_LAB_SECRET_ACCESS_KEY` e `AWS_LAB_SESSION_TOKEN`: as credenciais
+  temporárias do Academy (*AWS Details → AWS CLI*). No repositório, e não no
+  environment, porque o job `plan` roda sem environment. Expiram com a sessão
+  do lab (~4h): atualize antes de cada deploy com
+  `./scripts/atualizar-credenciais-lab.sh`, que lê o perfil `academy` do AWS
+  CLI e grava os três secrets neste repositório, no do banco e no da Lambda
+  (onde você for admin).
+- **Environments** `production` (com **required reviewers**) e `staging`. Sem
+  eles, o GitHub cria o environment no primeiro run **sem proteção**, e o apply
+  de prod passaria sem aprovação.
+- **Variável** `STAGING_ENABLED=true` só quando for usar o staging: ele dobra o
+  custo (EKS, NAT, NLB).
 
-   O agent só precisa estar de pé durante plan e apply. O `.terraform.lock.hcl`
-   tem hashes para `linux_amd64` e `linux_arm64`, então o agent roda nativo
-   tanto em x86 quanto em Mac com Apple Silicon.
-4. Credenciais: um **Variable Set** compartilhado com os workspaces do banco,
-   com as variáveis **Env (sensitive)** `AWS_ACCESS_KEY_ID`,
-   `AWS_SECRET_ACCESS_KEY` e `AWS_SESSION_TOKEN`. São as credenciais temporárias
-   do Academy (*AWS Details → AWS CLI*), renovadas a cada sessão (~4h): atualize
-   no Variable Set e todos os workspaces passam a usar. Comece o apply com a
-   sessão recém-aberta: criar o EKS leva ~20 min.
-5. Variáveis **Terraform** do workspace:
-   - `environment`: `prod` ou `staging` (obrigatória, sem default).
-   - `kubernetes_version`: obrigatória, sem default. Use uma versão em suporte
-     padrão (`aws eks describe-cluster-versions --region us-east-1`); hoje,
-     `1.35`.
-   - `vpc_cidr`: opcional. Sugestão: `10.0.0.0/16` em prod e `10.1.0.0/16` em
-     staging.
-   - `lab_mode` (default `true`) e `node_instance_types` (default
-     `["t3.medium"]`) já servem para o Academy.
+O EKS leva ~20 min para subir: comece o deploy com a sessão do lab recém-aberta.
+Se as credenciais expirarem no meio, o apply falha e o próximo run continua de
+onde parou (o state guarda o que já foi criado).
 
-   O ID da conta **não precisa** de variável: `main.tf` monta
-   `arn:aws:iam::<conta>:role/LabRole` e `.../role/voclabs` com a conta das
-   próprias credenciais do run (`data.aws_caller_identity`). Só defina
-   `aws_account_id` (ou as ARNs completas `lab_role_arn`/`cluster_creator_arn`)
-   se a LabRole tiver nome diferente.
-6. Conecte o VCS (GitHub) na branch da tabela. PRs recebem *speculative plan*
-   automaticamente. Deixe o **apply manual** em prod: o plan é revisado antes de
-   confirmar.
+O ID da conta **não precisa** de variável: `main.tf` monta
+`arn:aws:iam::<conta>:role/LabRole` e `.../role/voclabs` com a conta das
+próprias credenciais do run (`data.aws_caller_identity`). Só defina
+`aws_account_id` (ou as ARNs completas `lab_role_arn`/`cluster_creator_arn`)
+se a LabRole tiver nome diferente.
 
-Para destruir pelo TFC é preciso a variável Env `CONFIRM_DESTROY=1` no
-workspace. Antes, remova o deploy da aplicação (`kubectl delete -k` no
-repositório 4): o ALB que o LB Controller cria a partir do Ingress fica fora do
-state e trava a exclusão da VPC.
+Depois do apply, o resumo do run traz o que os outros repositórios configuram:
+nome do cluster (`EKS_CLUSTER_NAME` do app), repositório ECR (`ECR_REPOSITORY`
+do app), CIDR da VPC e o endereço do Kong (`KONG_URL` da Lambda).
 
 > **Módulo EKS vendored** (`terraform/modules/eks`): cópia local do
 > `terraform-aws-modules/eks/aws` v20.37.2 com um input a mais,
@@ -213,24 +207,32 @@ state e trava a exclusão da VPC.
 
 ## State
 
-Não há state anterior a migrar: o state do HCP Terraform nasce no primeiro
-apply de cada workspace, que cria a infraestrutura do zero. O backend S3 antigo
-(`techchallenge-fiap-v1`) era de outra conta e não é usado.
+No bucket do bootstrap, key `k8s/<env>/terraform.tfstate`, com lock nativo do S3
+(`use_lockfile`). Não há state anterior a migrar: o backend S3 antigo
+(`techchallenge-fiap-v1`) era de outra conta, e o primeiro apply de cada
+ambiente cria a infraestrutura do zero.
 
 ## Regras de proteção (configurar no GitHub)
 
 - Branch `main` e `develop` protegidas — **sem push direto**.
 - Merge somente via **Pull Request** (com o `ci.yml` verde obrigatório).
-- O deploy da infraestrutura é disparado pelo HCP Terraform ao detectar o merge.
+- O deploy da infraestrutura é disparado pelo `deploy.yml` no merge, e o apply
+  de produção espera a aprovação do environment `production`.
 
 ## Uso local
 
 Pré-requisitos: Terraform `1.16.x` (`required_version = "~> 1.16"`), AWS CLI
-autenticado (credenciais do lab) e `kubectl`. Para operar contra um workspace do
-TFC, rode `terraform login`, exporte `TF_WORKSPACE` com o nome do workspace (o
-workspace precisa ter a tag `techchallenge-infra`) e rode `terraform init`,
-`terraform plan` e `terraform apply`. Com o workspace em modo Agent, o plan roda
-no agent, não na sua máquina.
+autenticado (credenciais do lab) e `kubectl`. Os mesmos comandos do pipeline:
+
+```bash
+cd terraform
+terraform init -backend-config="bucket=$TF_STATE_BUCKET" \
+               -backend-config="key=k8s/prod/terraform.tfstate"
+terraform plan -var-file=envs/prod.tfvars
+```
+
+Para mudar a infra, prefira o PR: o apply local não passa pela guarda nem pelo
+gate de aprovação.
 
 Depois do apply, para apontar o kubectl para o cluster:
 

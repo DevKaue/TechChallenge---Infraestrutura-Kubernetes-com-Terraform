@@ -11,11 +11,11 @@ variable "project" {
 }
 
 variable "environment" {
-  description = "Ambiente lógico (prod, staging). Obrigatória: definir em cada workspace do HCP Terraform."
+  description = "Ambiente lógico (prod, staging). Obrigatória: vem de terraform/envs/<env>.tfvars no deploy.yml."
   type        = string
 
   # Sem default de propósito: staging e prod dividem a mesma conta AWS, e um
-  # default "prod" faria um workspace sem a variável subir recursos com nome
+  # default "prod" faria um run sem o tfvars do ambiente subir recursos com nome
   # de produção (colisão ou sobrescrita).
   validation {
     condition     = contains(["prod", "staging"], var.environment)
@@ -107,7 +107,7 @@ variable "lab_mode" {
 }
 
 variable "aws_account_id" {
-  description = "ID da conta AWS (12 dígitos) usado para montar os ARNs da LabRole e da voclabs. Vazio = resolvido automaticamente pelas credenciais que rodam o plan/apply (data.aws_caller_identity) — o recomendado: nada específico por conta no código nem no workspace."
+  description = "ID da conta AWS (12 dígitos) usado para montar os ARNs da LabRole e da voclabs. Vazio = resolvido automaticamente pelas credenciais que rodam o plan/apply (data.aws_caller_identity) — o recomendado: nada específico por conta no código nem no pipeline."
   type        = string
   default     = ""
 
