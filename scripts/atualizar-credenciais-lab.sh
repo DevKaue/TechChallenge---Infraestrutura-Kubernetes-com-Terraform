@@ -29,8 +29,12 @@ else
   )
 fi
 
-# Exporta só para este processo; nada é escrito em disco.
-eval "$(aws configure export-credentials --profile "$perfil" --format env-no-export)"
+# Exporta só para este processo e os filhos dele; nada é escrito em disco.
+# `--format env` (com export), e não `env-no-export`: sem o export, o
+# `aws sts` abaixo não enxerga as variáveis e confere a credencial do perfil
+# default, aprovando a conta errada.
+eval "$(aws configure export-credentials --profile "$perfil" --format env)"
+unset AWS_PROFILE
 
 if [ -z "${AWS_SESSION_TOKEN:-}" ]; then
   echo "erro: o perfil '$perfil' não tem session token. As credenciais do Academy são temporárias e sempre trazem um." >&2
