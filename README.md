@@ -72,8 +72,60 @@ terraform/            toda a infraestrutura como código
 ├── discovery.tf      SG dos nós publicado no SSM para o repositório de banco
 ├── github-oidc.tf    OIDC provider + roles de deploy (app e Lambda), fora do lab
 └── outputs.tf        valores para configurar os repositórios 1 e 4
-.github/workflows/    ci.yml (fmt + validate em PR)
+bootstrap/            bucket S3 do state dos repositórios Terraform (aplicado
+                      uma vez por conta, ver "Bootstrap do bucket de state")
+.github/workflows/    ci.yml (fmt + validate em PR, terraform/ e bootstrap/)
 ```
+
+## Bootstrap do bucket de state
+
+Os repositórios com Terraform (este, o de banco e o da Lambda) guardam o state
+num bucket S3 só, com uma key por repositório e ambiente (`k8s/prod/...`,
+`db/prod/...`, `lambda/prod/...`). O bucket é criado pelo Terraform em
+`bootstrap/`:
+
+- nome `techchallenge-tfstate-<conta>`, calculado pelas credenciais do run:
+  nenhum ID de conta fica no código, e cada conta do AWS Academy ganha o seu;
+- versionamento (um state corrompido volta pela versão anterior), SSE-S3,
+  bloqueio de acesso público, ACLs desligadas, acesso só por TLS e expiração
+  das versões antigas;
+- `prevent_destroy`: um `destroy` acidental apagaria o state de todos os
+  repositórios.
+
+Roda **uma vez por conta**, na máquina de quem tem as credenciais do lab, e de
+novo só se o lab do Academy for resetado (o reset apaga o bucket). Não roda no
+GitHub Actions: o primeiro apply sempre tem state local, e um segundo run
+tentaria recriar o bucket.
+
+Pré-requisitos: Terraform `1.16.x`, credenciais do lab (`AWS_PROFILE` ou
+`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_SESSION_TOKEN`) e o `gh`
+autenticado.
+
+```bash
+cd bootstrap
+
+# 1. Primeiro apply com state LOCAL: o bucket ainda não existe para guardá-lo.
+#    O override troca o backend só nesta execução (está no .gitignore).
+printf 'terraform {\n  backend "local" {}\n}\n' > local_override.tf
+terraform init
+terraform apply
+BUCKET=$(terraform output -raw bucket_name)
+
+# 2. Move o state do bootstrap para dentro do próprio bucket.
+rm local_override.tf
+terraform init -migrate-state -force-copy -backend-config="bucket=$BUCKET"
+rm -f terraform.tfstate terraform.tfstate.backup   # cópia local, já migrada
+
+# 3. Variável que o `terraform init` dos repositórios usa como bucket.
+for repo in thiagoalmeida88/TechChallenge---Infraestrutura-Kubernetes-com-Terraform \
+            DevKaue/tech-challenge-database-infra \
+            DevKaue/TechChallange---Function-Serverless; do
+  gh variable set TF_STATE_BUCKET -R "$repo" -b "$BUCKET"
+done
+```
+
+Mudanças posteriores no bootstrap usam o state remoto:
+`terraform init -backend-config="bucket=$BUCKET"` e depois `plan`/`apply`.
 
 ## HCP Terraform (CI/CD)
 
