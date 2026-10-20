@@ -17,3 +17,7 @@ opencode.json
 **/.terraform/
 tf*plan*
 tfdestroy*
+# Overrides locais. O bootstrap usa um temporário (backend local) no primeiro
+# apply, antes de o bucket existir: nunca deve ir para o repositório.
+override.tf
+*_override.tf
