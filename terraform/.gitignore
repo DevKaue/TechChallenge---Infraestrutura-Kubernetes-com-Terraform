@@ -1,0 +1,23 @@
+# State e overrides locais — nunca commitados: o state guarda os segredos
+# gerados (JWT_SECRET, PASSWORD_SALT, WEBHOOK_SECRET e o DATABASE_URL lido do
+# repositório de banco) em texto claro.
+*.tfstate
+*.tfstate.*
+# Planos salvos (`-out=`): contêm os valores planejados, incluindo as senhas
+# geradas por random_password em TEXTO CLARO. Um plano de DESTROY é ainda pior:
+# carrega o estado atual inteiro. Nunca commitar.
+#
+# O padrão cobre qualquer nome — tfplan, tfdestroy, plano-do-joao — porque o
+# nome do arquivo é livre e regra por extensão não pega `-out=tfdestroy`.
+tf*plan*
+tfdestroy*
+*.tfplan
+*.tfvars
+!example.tfvars
+# Valores por ambiente, sem segredo: versionados para aparecer no diff do PR.
+!envs/*.tfvars
+.terraform/
+# .terraform.lock.hcl NÃO é ignorado de propósito: é o que garante
+# que o próximo `init` resolva exatamente as mesmas versões de provider.
+crash.log
+generated/

@@ -1,0 +1,22 @@
+# Achados aceitos conscientemente. Cada linha precisa de um porquê — sem isso
+# vira tapete para esconder problema.
+#
+# Revisar quando: o cluster deixar de ser descartável, ou o banco passar a ter
+# dado real.
+
+# AWS-0040 / AWS-0041 — endpoint público do EKS (0.0.0.0/0).
+# Deliberado: sem endpoint público seria preciso bastion ou VPN para rodar
+# kubectl e para o GitHub Actions alcançar o cluster. O acesso continua
+# autenticado por IAM e autorizado por RBAC. Para fechar: `cluster_endpoint_
+# public_access_cidrs` com os IPs de saída conhecidos.
+AWS-0040
+AWS-0041
+
+# AWS-0104 — egress irrestrito no security group dos nós.
+# Padrão do módulo EKS. Os nós precisam de saída para o ECR, para a API do EKS e
+# para atualizações, via NAT. Restringir exigiria VPC endpoints para ECR, S3,
+# STS e CloudWatch — custo e complexidade acima do que este projeto justifica.
+AWS-0104
+
+# Achados de RDS (AWS-0176/0177/0077) saíram daqui junto com o banco: o RDS
+# passou a ser provisionado pelo repositório de banco gerenciado.

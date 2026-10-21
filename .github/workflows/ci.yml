@@ -1,0 +1,62 @@
+name: ci
+
+on:
+  pull_request:
+    branches: [main, develop]
+  push:
+    branches: [main, develop]
+
+# O deploy (plan/apply) roda no deploy.yml. Este workflow é só o gate de PR:
+# formatação e validação estática, sem credencial e sem tocar o backend.
+permissions:
+  contents: read
+
+env:
+  TF_ACTIONS_WORKING_DIR: ./terraform
+
+jobs:
+  fmt-and-validate:
+    name: fmt + validate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ env.TF_ACTIONS_WORKING_DIR }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.16.5"
+
+      - name: terraform fmt
+        run: terraform fmt -check -diff
+
+      - name: terraform init
+        run: terraform init -backend=false -input=false
+
+      - name: terraform validate
+        run: terraform validate
+
+  # Job à parte, e não matrix no job acima: a matrix mudaria o nome do check
+  # "fmt + validate", que a proteção de branch pode exigir pelo nome.
+  bootstrap:
+    name: bootstrap fmt + validate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./bootstrap
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.16.5"
+
+      - name: terraform fmt
+        run: terraform fmt -check -diff
+
+      - name: terraform init
+        run: terraform init -backend=false -input=false
+
+      - name: terraform validate
+        run: terraform validate
