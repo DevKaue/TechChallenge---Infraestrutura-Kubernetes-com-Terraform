@@ -239,3 +239,47 @@ Depois do apply, para apontar o kubectl para o cluster:
 ```bash
 aws eks update-kubeconfig --name techchallenge-prod --region us-east-1
 ```
+
+## Operação no Learner Lab
+
+O AWS Academy encerra a sessão a cada ~4h, e isso derruba o ambiente de um jeito
+que o Terraform não resolve. Depois de **cada** *Start Lab*:
+
+1. Cole as credenciais novas no `~/.aws/credentials`, seção `[academy]`.
+2. `./scripts/atualizar-credenciais-lab.sh`: grava os secrets `AWS_LAB_*` dos
+   repositórios em que você é admin. Os outros precisam ser atualizados por quem
+   for admin deles, senão o deploy falha na etapa de credenciais.
+3. `./scripts/reciclar-nos.sh`: recicla os nós que não entraram no cluster.
+
+**Por que o passo 3 existe.** Ao fim da sessão, a AWS para as instâncias e o ASG
+as substitui, mas uma SCP da organização nega `ec2:DescribeInstances` à LabRole
+enquanto o lab está desligado. O `nodeadm` do nó novo precisa dessa chamada para
+se registrar: leva 403, desiste em ~10 min e nunca tenta de novo. A instância
+fica `running` e "saudável" para o ASG, mas fora do cluster: todo pod fica
+`Pending` e o NLB do Kong dá timeout. Terminar a instância com o lab ativo faz o
+ASG lançar outra, que registra em ~30 s.
+
+```bash
+./scripts/reciclar-nos.sh --dry-run   # só mostra o que reciclaria
+./scripts/reciclar-nos.sh             # recicla, pede confirmação
+```
+
+O script só recicla instâncias que **não** estão registradas e que têm mais de
+12 min (tolerância para um nó que ainda está subindo), e **aborta sem fazer nada**
+se não conseguir listar os nós do cluster.
+
+### Primeiro atendente em produção
+
+O banco de produção nasce vazio, e o único jeito nativo de criar usuário é o seed
+do App, que grava atendente e mecânicos com uma senha que está escrita no
+`seed.ts` de um repositório público. Com o App atrás de um NLB público, **não
+rode o seed em produção**. Em vez disso:
+
+```bash
+./scripts/criar-atendente-prod.sh seu.email@exemplo.com "Seu Nome"
+```
+
+O script pede a senha de forma interativa (rode em um terminal seu), gera o hash
+dentro do pod da API, com o mesmo algoritmo e o `PASSWORD_SALT` do App, e grava
+só o usuário informado. Rodar de novo com o mesmo e-mail redefine a senha. O
+login é `POST /api/auth/login` pelo Kong.
